@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <!-- 1. Viewport 優化 (加入 viewport-fit=cover 防瀏海) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- 2. PWA Manifest -->
+    <link rel="manifest" href='data:application/manifest+json,{"name":"名片辨識APP","short_name":"名片辨識","start_url":".","display":"standalone","orientation":"portrait","background_color":"#f8fafc","theme_color":"#1e293b","icons":[{"src":"https://i.postimg.cc/fT2sQW09/1.png","sizes":"192x192","type":"image/png"}]}' />
+    
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <title>名片辨識 APP - TONY STUDIO</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+            "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+        }
+    }
+    </script>
+
+    <style>
+        @keyframes fade-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fade-in 0.3s ease-out forwards;
+        }
+
+        html, body {
+            overscroll-behavior-y: none;
+            touch-action: pan-x pan-y;
+            height: 100%;
+            overflow-x: hidden;
+            overflow-y: auto; 
+        }
+
+        /* 3. 橫屏遮罩 */
+        #landscape-warning {
+            display: none;
+        }
+        @media screen and (max-width: 768px) and (orientation: landscape) {
+            #landscape-warning {
+                display: flex !important;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background-color: #0f172a;
+                z-index: 9999;
+                color: white;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+    <!-- 橫屏警示層 -->
+    <div id="landscape-warning">
+        <div class="text-4xl mb-4">📱↻</div>
+        <h2 class="text-xl font-bold mb-2">建議使用直向瀏覽</h2>
+        <p class="text-sm text-slate-400 mb-6">為獲得最佳體驗，請將手機轉正。</p>
+        <button 
+            onclick="document.getElementById('landscape-warning').style.display='none'"
+            class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm border border-slate-500 transition-colors"
+        >
+            我正在使用電腦 / 略過
+        </button>
+    </div>
+
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Camera, Upload, Settings, Save, User, FileText, Download, X, Check, Loader2, Search, HelpCircle, ExternalLink, CloudLightning, Sparkles, Lightbulb, Copy, MessageSquare, Image as ImageIcon, Mail, Database, UploadCloud, RefreshCw } from 'lucide-react';
+
+        // --- Config ---
+        const APP_CONFIG = {
+            title: "名片辨識 APP",
+            version: "2.1 (Cloud Sync Pro)", 
+            themeColor: "bg-slate-800",
+            logoUrl: "https://i.postimg.cc/fT2sQW09/1.png",
+            profileUrl: "https://i.postimg.cc/Gh8Zt7SX/S_56844323.jpg",
+            copyright: "© 2026 TONY STUDIO. 本教材由 TONY STUDIO 楊文澤顧問設計. All Rights Reserved."
+        };
+
+        const DEFAULT_SCHEMA = {
+            name: "", title: "", company: "", phone_mobile: "", phone_office: "", email: "", address: "", website: "", notes: ""
+        };
+
+        const FIELD_LABELS = {
+            name: "姓名 Name", title: "職稱 Title", company: "公司名稱 Company", phone_mobile: "行動電話 Mobile", phone_office: "公司電話 Tel", email: "電子郵件 Email", address: "地址 Address", website: "網站 Website", notes: "備註 Notes"
+        };
+
+        // --- Helpers ---
+        const fileToBase64 = (file) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result.split(',')[1]); 
+                reader.onerror = (error) => reject(error);
+            });
+        };
+
+        const downloadJSON = (data) => {
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `business_cards_backup_${new Date().toISOString().slice(0,10)}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        const downloadCSV = (data) => {
+            const headers = Object.keys(DEFAULT_SCHEMA);
+            const csvContent = [
+                headers.join(','), 
+                ...data.map(row => headers.map(fieldName => {
+                    let val = row[fieldName] || '';
+                    val = val.toString().replace(/"/g, '""');
+                    return `"${val}"`;
+                }).join(','))
+            ].join('\n');
+            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            link.setAttribute('download', `business_cards_export_${new Date().toISOString().slice(0,10)}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        // --- Components ---
+        const Card = ({ children, className = "", onClick }) => (
+            <div onClick={onClick} className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden ${className}`}>
+                {children}
+            </div>
+        );
+
+        const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon }) => {
+            const baseStyle = "flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
+            const variants = {
+                primary: "bg-slate-800 text-white hover:bg-slate-700 shadow-md",
+                secondary: "bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 shadow-sm",
+                danger: "bg-red-500 text-white hover:bg-red-600",
+                ai: "bg-gradient-to-r from-violet-600 to-indigo-600 text-white hover:from-violet-700 hover:to-indigo-700 shadow-md border border-violet-400",
+                success: "bg-green-600 text-white hover:bg-green-700 shadow-md"
+            };
+            return (
+                <button onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant] || variants.primary} ${className}`}>
+                    {Icon && <Icon size={18} className="mr-2" />}
+                    {children}
+                </button>
+            );
+        };
+
+        const SettingsView = ({ apiKey, setApiKey, scriptUrl, setScriptUrl, onBack }) => {
+            const [showHelp, setShowHelp] = useState(false);
+            return (
+                <div className="max-w-2xl mx-auto p-6 animate-fade-in pb-20">
+                    <Card className="p-6">
+                        <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center">
+                            <Settings className="mr-2" /> 設定與 API 管理
+                        </h2>
+                        <div className="space-y-6">
+                            <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm mb-4">
+                                💡 提示：您的設定會自動儲存在此瀏覽器中。
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Google Gemini API Key (必填)</label>
+                                <input 
+                                    type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                                    placeholder="輸入您的 AI Studio Key..."
+                                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 outline-none"
+                                />
+                            </div>
+                            <div className="pt-4 border-t border-slate-100">
+                                <div className="flex justify-between items-center mb-2">
+                                    <label className="block text-sm font-medium text-slate-700 flex items-center">
+                                        <CloudLightning size={16} className="mr-1 text-green-600" />
+                                        Google Apps Script URL (雲端同步用)
+                                    </label>
+                                    <button onClick={() => setShowHelp(!showHelp)} className="text-xs text-blue-600 hover:text-blue-800 flex items-center">
+                                        <HelpCircle size={14} className="mr-1" /> 如何設定?
+                                    </button>
+                                </div>
+                                <input 
+                                    type="text" value={scriptUrl} onChange={(e) => setScriptUrl(e.target.value)}
+                                    placeholder="https://script.google.com/macros/s/..../exec"
+                                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 outline-none font-mono text-sm"
+                                />
+                                {showHelp && (
+                                    <div className="mt-3 p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-slate-600 space-y-2">
+                                        <p className="font-bold text-blue-800">GAS 寫入失敗或 Failed to fetch 排除清單：</p>
+                                        <ol className="list-decimal list-inside space-y-1">
+                                            <li>GAS 必須包含 <code>doGet</code> 與 <code>doPost</code> 函數。</li>
+                                            <li>是否已按下「部署」&gt;「建立新版本」？(最常忘記)</li>
+                                            <li>權限是否設為「所有人 (Anyone)」？</li>
+                                            <li>網址結尾應為 <code>/exec</code>。</li>
+                                        </ol>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="pt-4 border-t border-slate-100 flex justify-end">
+                                <Button onClick={onBack} variant="primary">確認並返回</Button>
+                            </div>
+                        </div>
+                    </Card>
+                </div>
+            );
+        };
+
+        const AboutView = ({ onBack }) => {
+            return (
+                <div className="max-w-4xl mx-auto p-6 animate-fade-in pb-20">
+                    <div className="mb-6">
+                        <Button onClick={onBack} variant="secondary" icon={X}>關閉</Button>
+                    </div>
+                    <Card className="p-8">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                            <div className="col-span-1 flex flex-col items-center text-center">
+                                <div className="w-48 h-48 rounded-full overflow-hidden border-4 border-slate-100 shadow-lg mb-4">
+                                    <img src={APP_CONFIG.profileUrl} alt="TONY 老師" className="w-full h-full object-cover" />
+                                </div>
+                                <h2 className="text-2xl font-bold text-slate-800">TONY 老師</h2>
+                                <p className="text-slate-500 font-medium">AI 導師 / 資深顧問 / 創業家</p>
+                            </div>
+                            <div className="col-span-1 md:col-span-2 space-y-6">
+                                <div>
+                                    <h3 className="text-lg font-bold text-slate-800 border-b border-slate-200 pb-2 mb-3">關於創作者</h3>
+                                    <div className="text-slate-600 leading-relaxed space-y-4">
+                                        <p>
+                                            我是一位擁有深厚業界經驗的品牌行銷、行銷科技 (MarTech)、生成式 AI 創作者及專業講師。
+                                            熱愛創新與思考，致力於將複雜的商業理論轉化為落地的實戰應用。
+                                        </p>
+                                        <p>
+                                            我具備設計、行銷、商業與創業的全方位實務經驗，並曾於上市公司擔任長達 14 年的發言人，
+                                            深知企業運營、媒體公關與人脈管理的核心痛點。
+                                        </p>
+                                        <p>
+                                            開發這款「名片辨識 APP」的初衷，正是希望能結合最新的 AI 技術，解決商務人士在人脈整理上的繁瑣工作。
+                                            透過科技賦能，讓我們能將更多寶貴的時間，專注於人與人之間真實的交流與價值的創造。
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </Card>
+                </div>
+            );
+        };
+
+        const AiAssistant = ({ data, apiKey }) => {
+            const [aiResult, setAiResult] = useState(null); 
+            const [aiLoading, setAiLoading] = useState(false);
+            const [activeTab, setActiveTab] = useState(null); 
+            const [copied, setCopied] = useState(false);
+
+            const generateContent = async (type) => {
+                if (!apiKey) {
+                    alert("請先設定 API Key 才能使用 AI 功能！");
+                    return;
+                }
+                setAiLoading(true); setActiveTab(type); setAiResult(null); setCopied(false);
+
+                let prompt = "";
+                if (type === 'email') {
+                    prompt = `Act as a top-tier business secretary. Write a professional follow-up email in Traditional Chinese (繁體中文) to: Name: ${data.name}, Title: ${data.title}, Company: ${data.company}. REQUIREMENTS: 1. Tone: Warm, professional. 2. Output Format: Subject: [Subject] Body: [Body]`;
+                } else {
+                    prompt = `Act as a networking coach. Analyze this person: ${data.title} at ${data.company}. OUTPUT FORMAT: Subject: 🔍 職涯與話題分析 Body: 【職責推測】[Analysis] 【破冰三招】1. [Topic 1] 2. [Topic 2] 3. [Topic 3]`;
+                }
+
+                try {
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+                    const result = await response.json();
+                    if (result.error) throw new Error(result.error.message);
+                    
+                    const rawText = result.candidates[0].content.parts[0].text;
+                    let subject = "商務信件"; let body = rawText;
+                    const subjectMatch = rawText.match(/Subject:\s*(.*)/i);
+                    const bodyMatch = rawText.match(/Body:\s*([\s\S]*)/i);
+                    if (subjectMatch && bodyMatch) {
+                        subject = subjectMatch[1].trim(); body = bodyMatch[1].trim();
+                    }
+                    setAiResult({ subject, body, raw: rawText });
+                } catch (e) {
+                    setAiResult({ subject: "錯誤", body: "AI 生成失敗: " + e.message, raw: "" });
+                } finally {
+                    setAiLoading(false);
+                }
+            };
+
+            const copyToClipboard = () => {
+                if (!aiResult) return;
+                const textToCopy = `主旨：${aiResult.subject}\n\n${aiResult.body}`;
+                const textArea = document.createElement("textarea");
+                textArea.value = textToCopy;
+                textArea.style.position = "fixed"; textArea.style.left = "-9999px";
+                document.body.appendChild(textArea);
+                textArea.select();
+                try { document.execCommand('copy'); setCopied(true); setTimeout(() => setCopied(false), 2000); } 
+                catch (err) { alert("複製失敗。"); }
+                document.body.removeChild(textArea);
+            };
+
+            return (
+                <div className="mt-8 border-t border-slate-200 pt-6">
+                    <h4 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center">
+                        <Sparkles size={16} className="mr-2 text-violet-500" /> AI 智能軍師
+                    </h4>
+                    <div className="flex gap-3 mb-6">
+                        <Button variant="ai" className="flex-1 text-sm py-3" icon={Mail} onClick={() => generateContent('email')} disabled={aiLoading}>
+                            {aiLoading && activeTab === 'email' ? '撰寫中...' : '生成商務信'}
+                        </Button>
+                        <Button variant="secondary" className="flex-1 text-sm border-violet-200 text-violet-700 hover:bg-violet-50" icon={Lightbulb} onClick={() => generateContent('insight')} disabled={aiLoading}>
+                            {aiLoading && activeTab === 'insight' ? '分析中...' : '話題分析'}
+                        </Button>
+                    </div>
+
+                    {(aiResult || aiLoading) && (
+                        <div className="animate-fade-in">
+                            {aiLoading ? (
+                                <div className="bg-slate-50 rounded-xl border border-slate-200 p-8 flex flex-col items-center justify-center text-slate-500">
+                                    <Loader2 size={32} className="animate-spin mb-2 text-violet-500" />
+                                    <p className="text-sm">AI 正在為您構思內容...</p>
+                                </div>
+                            ) : (
+                                <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden ring-1 ring-slate-200">
+                                    <div className="bg-slate-100 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
+                                        <div className="flex items-center">
+                                            <span className="text-xs font-bold text-slate-500 uppercase mr-2">主旨:</span>
+                                            <span className="text-sm font-medium text-slate-800">{aiResult.subject}</span>
+                                        </div>
+                                    </div>
+                                    <div className="p-6 bg-white min-h-[150px]">
+                                        <p className="whitespace-pre-wrap text-sm text-slate-700 leading-relaxed font-sans">{aiResult.body}</p>
+                                    </div>
+                                    <div className="bg-slate-50 px-4 py-3 border-t border-slate-200 flex justify-end">
+                                        <button onClick={copyToClipboard} className={`flex items-center px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${copied ? "bg-green-100 text-green-700" : "bg-slate-800 text-white hover:bg-slate-700 shadow"}`}>
+                                            {copied ? <Check size={16} className="mr-2" /> : <Copy size={16} className="mr-2" />}
+                                            {copied ? "已複製成功！" : "複製全部內容"}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const EditView = ({ data, imagePreview, onSave, onCancel, onChange, isSaving, apiKey }) => (
+            <div className="max-w-6xl mx-auto p-4 md:p-6 animate-fade-in flex flex-col md:flex-row gap-6 pb-20">
+                <div className="w-full md:w-1/2 flex flex-col">
+                    <Card className="flex-1 bg-slate-100 flex items-center justify-center relative p-4 min-h-[300px]">
+                        {imagePreview ? (
+                            <img src={imagePreview} alt="Uploaded" className="max-w-full max-h-[60vh] object-contain shadow-lg rounded" />
+                        ) : (
+                            <div className="text-center text-slate-400 flex flex-col items-center">
+                                <ImageIcon size={64} className="mb-3 opacity-50" />
+                                <p className="font-medium text-lg mb-1">歷史紀錄 (無圖片)</p>
+                            </div>
+                        )}
+                    </Card>
+                </div>
+                <div className="w-full md:w-1/2 flex flex-col">
+                    <Card className="flex-1 flex flex-col h-full">
+                        <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                            <h3 className="font-bold text-slate-700 flex items-center">
+                                <FileText className="w-4 h-4 mr-2" /> {imagePreview ? '辨識結果' : '歷史資料'} (可編輯)
+                            </h3>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                            {Object.keys(DEFAULT_SCHEMA).map((key) => (
+                                <div key={key}>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">{FIELD_LABELS[key]}</label>
+                                    {key === 'notes' ? (
+                                        <textarea value={data[key] || ''} onChange={(e) => onChange(key, e.target.value)} className="w-full p-2 border border-slate-200 rounded text-slate-700 text-sm" rows={3} />
+                                    ) : (
+                                        <input type="text" value={data[key] || ''} onChange={(e) => onChange(key, e.target.value)} className="w-full p-2 border border-slate-200 rounded text-slate-700 font-medium" />
+                                    )}
+                                </div>
+                            ))}
+                            <AiAssistant data={data} apiKey={apiKey} />
+                        </div>
+                        <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-3 justify-end sticky bottom-0 z-10">
+                            <Button variant="secondary" onClick={onCancel} disabled={isSaving}>{imagePreview ? '放棄' : '返回列表'}</Button>
+                            {imagePreview && <Button variant="primary" onClick={onSave} icon={Save} disabled={isSaving}>{isSaving ? '處理中...' : '確認儲存'}</Button>}
+                        </div>
+                    </Card>
+                </div>
+            </div>
+        );
+
+        const HistoryView = ({ history, onBack, onDelete, onSelect }) => {
+            const [searchTerm, setSearchTerm] = useState("");
+            const filteredHistory = history.filter(item => 
+                item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                item.company.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            return (
+                <div className="max-w-4xl mx-auto p-6 animate-fade-in h-[calc(100vh-140px)] flex flex-col pb-20">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-slate-800">已儲存的名片</h2>
+                        <Button variant="secondary" onClick={onBack} icon={X}>關閉</Button>
+                    </div>
+                    <div className="mb-4">
+                        <input type="text" placeholder="搜尋姓名或公司..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full p-3 border border-slate-300 rounded-lg outline-none" />
+                    </div>
+                    <div className="flex-1 overflow-y-auto space-y-3">
+                        {filteredHistory.length === 0 ? <div className="text-center py-12 text-slate-500">沒有找到符合的資料</div> : filteredHistory.map((item) => (
+                            <Card key={item.id} className="p-4 flex justify-between items-center hover:shadow-md cursor-pointer" onClick={() => onSelect(item)}>
+                                <div>
+                                    <div className="font-bold text-slate-800">{item.name}</div>
+                                    <div className="text-sm text-slate-600">{item.title} {item.company ? `| ${item.company}` : ''}</div>
+                                </div>
+                                <div className="flex items-center gap-4">
+                                    <button onClick={(e) => { e.stopPropagation(); onDelete(item.id); }} className="text-red-400 p-2 hover:bg-red-50 rounded-full"><X size={16} /></button>
+                                </div>
+                            </Card>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        const DashboardView = ({ onUpload, onCamera, savedCount, onExportCSV, onExportJSON, onImportJSON, onCloudSync, isSyncing, hasScriptUrl, onOpenHistory }) => {
+            const fileInputRef = useRef(null);
+            return (
+                <div className="max-w-4xl mx-auto p-6 animate-fade-in pb-20">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <Card className="p-6 bg-gradient-to-br from-slate-800 to-slate-700 text-white">
+                            <div className="text-slate-300 text-sm font-medium mb-1">本機已儲存名片</div>
+                            <div className="text-4xl font-bold">{savedCount}</div>
+                        </Card>
+                        <div className="md:col-span-2 flex flex-col justify-center text-slate-600">
+                            <h2 className="text-2xl font-bold text-slate-800 mb-2">歡迎回來，TONY 老師</h2>
+                            <p>準備好整理您的人脈了嗎？請選擇下方的輸入方式。</p>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                        <button onClick={onCamera} className="group relative overflow-hidden rounded-2xl bg-white border-2 border-dashed border-slate-300 hover:border-slate-500 p-8 transition-all hover:shadow-lg text-left">
+                            <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4"><Camera size={24} /></div>
+                            <h3 className="text-xl font-bold text-slate-800 mb-1">相機拍攝</h3>
+                            <p className="text-slate-500 text-sm">直接使用裝置相機拍攝實體名片。</p>
+                        </button>
+                        <label className="cursor-pointer group relative overflow-hidden rounded-2xl bg-white border-2 border-dashed border-slate-300 hover:border-slate-500 p-8 transition-all hover:shadow-lg text-left block">
+                            <input type="file" className="hidden" accept="image/*" onChange={onUpload} />
+                            <div className="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-4"><Upload size={24} /></div>
+                            <h3 className="text-xl font-bold text-slate-800 mb-1">上傳圖片</h3>
+                            <p className="text-slate-500 text-sm">支援 JPG, PNG 格式的名片圖檔。</p>
+                        </label>
+                    </div>
+
+                    <div className="flex gap-4 mb-8">
+                        {savedCount > 0 && (
+                            <>
+                                <Button variant="secondary" icon={Download} onClick={onExportCSV} className="flex-1">匯出 CSV</Button>
+                                <Button variant="primary" icon={Search} onClick={onOpenHistory} className="flex-1">檢視歷史紀錄</Button>
+                            </>
+                        )}
+                    </div>
+
+                    {/* 資料備份與雲端同步區塊 */}
+                    <div className="mt-8 pt-6 border-t border-slate-200">
+                        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center">
+                            <Database size={16} className="mr-2" /> 資料備份與雲端同步
+                        </h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            <Button variant="secondary" className="w-full text-sm" icon={Download} onClick={onExportJSON} disabled={savedCount === 0}>
+                                備份本機 (JSON)
+                            </Button>
+                            
+                            <div>
+                                <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={onImportJSON} />
+                                <Button variant="secondary" className="w-full text-sm" icon={UploadCloud} onClick={() => fileInputRef.current?.click()}>
+                                    載入備份 (JSON)
+                                </Button>
+                            </div>
+
+                            {hasScriptUrl && (
+                                <Button variant="secondary" className="w-full text-sm border-blue-200 text-blue-700 hover:bg-blue-50" icon={RefreshCw} onClick={onCloudSync} disabled={isSyncing}>
+                                    {isSyncing ? '同步中...' : '從雲端拉取同步'}
+                                </Button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        function App() {
+            const [view, setView] = useState('dashboard');
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+            const [scriptUrl, setScriptUrl] = useState(() => localStorage.getItem('google_script_url') || ''); 
+            const [loading, setLoading] = useState(false);
+            const [saving, setSaving] = useState(false);
+            const [syncing, setSyncing] = useState(false);
+            const [error, setError] = useState('');
+            const [successMsg, setSuccessMsg] = useState(''); 
+            
+            const [currentImage, setCurrentImage] = useState(null);
+            const [currentData, setCurrentData] = useState(DEFAULT_SCHEMA);
+            const [history, setHistory] = useState(() => {
+                const saved = localStorage.getItem('card_history');
+                return saved ? JSON.parse(saved) : [];
+            });
+
+            const fileInputRef = useRef(null);
+
+            useEffect(() => { localStorage.setItem('gemini_api_key', apiKey); }, [apiKey]);
+            useEffect(() => { localStorage.setItem('google_script_url', scriptUrl); }, [scriptUrl]);
+            useEffect(() => { localStorage.setItem('card_history', JSON.stringify(history)); }, [history]);
+
+            const processImage = async (file) => {
+                if (!apiKey) { alert("請先設定 Gemini API Key！"); setView('settings'); return; }
+                setLoading(true); setError('');
+                try {
+                    const base64Data = await fileToBase64(file);
+                    setCurrentImage(`data:image/jpeg;base64,${base64Data}`);
+                    const prompt = `Extract info from business card. JSON keys: name, title, company, phone_mobile, phone_office, email, address, website, notes. Return ONLY JSON. Preserve Traditional Chinese.`;
+                    
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }],
+                            generationConfig: { response_mime_type: "application/json", temperature: 0 }
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.error) throw new Error(data.error.message);
+                    
+                    const parsedData = JSON.parse(data.candidates[0].content.parts[0].text);
+                    setCurrentData({ ...DEFAULT_SCHEMA, ...parsedData });
+                    setView('edit');
+                } catch (err) {
+                    setError("辨識失敗: " + err.message);
+                } finally { setLoading(false); }
+            };
+
+            const handleSaveCard = () => {
+                setSaving(true);
+                const newCard = { ...currentData, id: crypto.randomUUID(), capture_date: new Date().toISOString() };
+                setHistory([newCard, ...history]);
+
+                if (scriptUrl) {
+                    // Fire and Forget (射後不理) - 吸收瀏覽器的轉址 CORS 假警報
+                    fetch(scriptUrl.trim(), { 
+                        method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, 
+                        body: JSON.stringify(newCard) 
+                    }).catch(e => console.log('Background sync (ignored fake alarm)', e));
+                    
+                    setSuccessMsg("資料已儲存本機，並於背景發送至雲端！");
+                } else {
+                    setSuccessMsg("已儲存於本機！(未設定 Google Sheet)");
+                }
+                
+                setTimeout(() => setSuccessMsg(''), 3000);
+                setSaving(false); setView('dashboard'); setCurrentData(DEFAULT_SCHEMA); setCurrentImage(null);
+            };
+
+            const handleCloudSync = async () => {
+                if (!scriptUrl) return;
+                
+                let cleanUrl = scriptUrl.trim();
+                if (!cleanUrl.startsWith('http')) {
+                    setError("錯誤：網址格式不正確，請確保有包含 http 或 https 開頭。");
+                    return;
+                }
+
+                setSyncing(true);
+                setError('');
+                setSuccessMsg('');
+
+                try {
+                    const response = await fetch(cleanUrl);
+                    const textData = await response.text();
+                    
+                    try {
+                        const cloudData = JSON.parse(textData);
+                        
+                        if (cloudData.error) {
+                            setError(`Google 雲端回傳錯誤：\n${cloudData.error}\n請檢查試算表中是否有空行或特殊格式。`);
+                            return;
+                        }
+
+                        if (!Array.isArray(cloudData)) throw new Error("資料不是陣列");
+
+                        let addedCount = 0;
+                        const currentIds = new Set(history.map(item => String(item.id)));
+                        const newHistory = [...history];
+
+                        cloudData.forEach(item => {
+                            if (item.id && !currentIds.has(String(item.id))) {
+                                newHistory.push(item);
+                                currentIds.add(String(item.id));
+                                addedCount++;
+                            }
+                        });
+
+                        newHistory.sort((a, b) => new Date(b.capture_date) - new Date(a.capture_date));
+                        setHistory(newHistory);
+                        setSuccessMsg(`雲端同步成功！新增了 ${addedCount} 筆資料。`);
+                        setTimeout(() => setSuccessMsg(''), 4000);
+                        
+                    } catch (parseError) {
+                        console.error("解析失敗，這不是 JSON:", textData);
+                        setError(`雲端同步失敗：無法解析資料。\n\n您可能收到了 HTML 錯誤網頁。請使用無痕視窗開啟您的 GAS 網址，檢查真實錯誤。`);
+                    }
+
+                } catch (err) {
+                    console.error("Fetch Error:", err);
+                    setError("遭瀏覽器安全攔截 (Failed to fetch)。\n\n👉 檢查 GAS：\n1. 需有防禦版 doGet 函數並回傳 JSON。\n2. 權限為「所有人」。\n3. 務必「建立新版本」。");
+                } finally {
+                    setSyncing(false);
+                }
+            };
+
+            const handleImportJSON = (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const importedData = JSON.parse(event.target.result);
+                        if (!Array.isArray(importedData)) throw new Error("格式錯誤");
+                        
+                        let addedCount = 0;
+                        const currentIds = new Set(history.map(item => String(item.id)));
+                        const newHistory = [...history];
+
+                        importedData.forEach(item => {
+                            if (item.id && !currentIds.has(String(item.id))) {
+                                newHistory.push(item);
+                                currentIds.add(String(item.id));
+                                addedCount++;
+                            }
+                        });
+                        newHistory.sort((a, b) => new Date(b.capture_date) - new Date(a.capture_date));
+                        setHistory(newHistory);
+                        setSuccessMsg(`備份載入成功！共新增 ${addedCount} 筆不重複的資料。`);
+                        setTimeout(() => setSuccessMsg(''), 3000);
+                    } catch (err) { setError("載入失敗：無效的 JSON 檔案。"); }
+                };
+                reader.readAsText(file);
+                e.target.value = ''; 
+            };
+
+            return (
+                <div className="min-h-[100dvh] bg-slate-50 font-sans flex flex-col text-slate-800">
+                    <input type="file" accept="image/*" capture="environment" ref={fileInputRef} className="hidden" onChange={(e) => e.target.files?.[0] && processImage(e.target.files[0])} />
+                    
+                    {/* 防遮擋標頭 (Safe Area 加大下推) */}
+                    <header className={`${APP_CONFIG.themeColor} text-white shadow-md sticky top-0 z-50`} style={{ paddingTop: 'max(env(safe-area-inset-top, 60px), 60px)' }}>
+                        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+                            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('dashboard')}>
+                                <img src={APP_CONFIG.logoUrl} alt="Logo" className="h-10 w-auto" />
+                                <div className="hidden sm:block">
+                                    <h1 className="text-lg font-bold tracking-wide">{APP_CONFIG.title}</h1>
+                                    <span className="text-xs text-slate-300 block -mt-1">{APP_CONFIG.version}</span>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setView('about')} className="p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white"><User size={20} /></button>
+                                <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white"><Settings size={20} /></button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="flex-1 w-full max-w-7xl mx-auto py-6 px-4">
+                        {error && (
+                            <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded shadow-sm flex justify-between items-center animate-fade-in">
+                                <div className="flex items-center text-red-700 whitespace-pre-line text-sm"><span className="font-bold mr-2">錯誤：</span> {error}</div>
+                                <button onClick={() => setError('')}><X size={18} className="text-red-400" /></button>
+                            </div>
+                        )}
+                        {successMsg && (
+                            <div className="bg-green-50 border-l-4 border-green-500 p-4 mb-6 rounded shadow-sm flex items-center animate-fade-in text-sm">
+                                <Check size={18} className="mr-2 text-green-600" /> <span className="text-green-700">{successMsg}</span>
+                            </div>
+                        )}
+
+                        {loading && (
+                            <div className="flex flex-col items-center justify-center py-20 text-slate-600">
+                                <Loader2 className="animate-spin mb-4 text-slate-800" size={48} />
+                                <p className="font-medium animate-pulse">AI 正在辨識名片資訊中...</p>
+                            </div>
+                        )}
+
+                        {!loading && view === 'dashboard' && <DashboardView onUpload={(e) => e.target.files?.[0] && processImage(e.target.files[0])} onCamera={() => fileInputRef.current && fileInputRef.current.click()} savedCount={history.length} onExportCSV={() => downloadCSV(history)} onExportJSON={() => downloadJSON(history)} onImportJSON={handleImportJSON} onCloudSync={handleCloudSync} isSyncing={syncing} hasScriptUrl={!!scriptUrl} onOpenHistory={() => setView('history')} />}
+                        {!loading && view === 'settings' && <SettingsView apiKey={apiKey} setApiKey={setApiKey} scriptUrl={scriptUrl} setScriptUrl={setScriptUrl} onBack={() => setView('dashboard')} />}
+                        {!loading && view === 'about' && <AboutView onBack={() => setView('dashboard')} />}
+                        {!loading && view === 'edit' && <EditView data={currentData} imagePreview={currentImage} onChange={(field, value) => setCurrentData({...currentData, [field]: value})} onSave={handleSaveCard} onCancel={() => {setCurrentImage(null); setView('dashboard');}} isSaving={saving} apiKey={apiKey} />}
+                        {!loading && view === 'history' && <HistoryView history={history} onBack={() => setView('dashboard')} onDelete={(id) => { if(window.confirm("確定刪除？")) setHistory(history.filter(item => item.id !== id)); }} onSelect={(item) => { setCurrentData(item); setCurrentImage(null); setView('edit'); }} />}
+                    </main>
+                    <footer className="bg-slate-900 text-slate-500 py-4 text-center text-xs border-t border-slate-800"><p>{APP_CONFIG.copyright}</p></footer>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
