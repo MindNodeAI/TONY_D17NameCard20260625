@@ -233,6 +233,18 @@
             XLSX.writeFile(workbook, `business_cards_export_${new Date().toISOString().slice(0,10)}.xlsx`);
         };
 
+        // --- 優化邏輯：強健的 AI JSON 解析器 (防止 Markdown 導致 Crash) ---
+        const parseAIResponse = (text) => {
+            try {
+                // 強制清除可能附帶的 ```json 與 ``` 標記
+                const cleanText = text.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+                return JSON.parse(cleanText);
+            } catch (e) {
+                console.error("JSON 解析失敗，原始回傳內容:", text);
+                throw new Error("AI 回傳資料格式異常，無法解析。");
+            }
+        };
+
         // --- Components ---
         const Card = ({ children, className = "", onClick }) => (
             <div onClick={onClick} className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden ${className}`}>
@@ -491,7 +503,7 @@
                                 <FileText className="w-4 h-4 mr-2" /> {imagePreview ? '辨識結果與情報' : '歷史資料'} (可編輯)
                             </h3>
                         </div>
-                        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                        <div className="flex-1 overflow-y-auto p-6 space-y-5">
                             
                             {/* AI 自動標籤 (Auto-Tagging) */}
                             {data.tags && data.tags.length > 0 && (
@@ -517,18 +529,71 @@
                                 </div>
                             )}
 
-                            {['meetDate', 'meetContext', 'name', 'name_eng', 'title', 'company', 'careerHistory', 'phone_mobile', 'phone_office', 'email', 'address', 'website', 'notes'].map((key) => (
-                                <div key={key} className="animate-fade-in">
-                                    <label className={`block text-xs font-bold uppercase tracking-wider mb-1 ${key === 'meetContext' || key === 'careerHistory' || key === 'meetDate' ? 'text-indigo-600' : 'text-slate-500'}`}>{FIELD_LABELS[key]}</label>
-                                    {key === 'notes' || key === 'careerHistory' ? (
-                                        <textarea value={data[key] || ''} onChange={(e) => onChange(key, e.target.value)} className="w-full p-2 border border-slate-200 rounded text-slate-700 text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-shadow" rows={key === 'careerHistory' ? 2 : 3} placeholder={key === 'careerHistory' ? '例如：前台積電副總 / 兼任ABC公司董事...' : ''} />
-                                    ) : key === 'meetDate' ? (
-                                        <input type="date" value={data[key] || ''} onChange={(e) => onChange(key, e.target.value)} className="w-full p-2 border border-slate-200 rounded text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-shadow text-sm" />
-                                    ) : (
-                                        <input type="text" value={data[key] || ''} onChange={(e) => onChange(key, e.target.value)} className={`w-full p-2 border border-slate-200 rounded text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-shadow ${key === 'meetContext' ? 'bg-indigo-50/50' : ''}`} placeholder={key === 'meetContext' ? '例如：2026 COMPUTEX, 台大 EMBA 聚會...' : ''} />
-                                    )}
+                            {/* --- 優化 UX：改用 Grid 網格佈局取代單行排列 --- */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-indigo-600">{FIELD_LABELS['meetContext']}</label>
+                                    <input type="text" value={data['meetContext'] || ''} onChange={(e) => onChange('meetContext', e.target.value)} className="w-full p-2.5 border border-indigo-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all bg-indigo-50/40" placeholder="例如：2026 COMPUTEX, 台大 EMBA 聚會..." />
                                 </div>
-                            ))}
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['meetDate']}</label>
+                                    <input type="date" value={data['meetDate'] || ''} onChange={(e) => onChange('meetDate', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all text-sm" />
+                                </div>
+                                <div className="hidden md:block"></div> {/* 電腦版排版佔位，讓日期左對齊 */}
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['name']}</label>
+                                    <input type="text" value={data['name'] || ''} onChange={(e) => onChange('name', e.target.value)} className="w-full p-2.5 border border-slate-300 rounded-lg text-slate-800 font-bold focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['name_eng']}</label>
+                                    <input type="text" value={data['name_eng'] || ''} onChange={(e) => onChange('name_eng', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+                                
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['company']}</label>
+                                    <input type="text" value={data['company'] || ''} onChange={(e) => onChange('company', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['title']}</label>
+                                    <input type="text" value={data['title'] || ''} onChange={(e) => onChange('title', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+                                
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-indigo-600">{FIELD_LABELS['careerHistory']}</label>
+                                    <textarea value={data['careerHistory'] || ''} onChange={(e) => onChange('careerHistory', e.target.value)} className="w-full p-2.5 border border-indigo-200 rounded-lg text-slate-700 text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all" rows={2} placeholder="例如：前台積電副總 / 兼任ABC公司董事..." />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['phone_mobile']}</label>
+                                    <input type="text" value={data['phone_mobile'] || ''} onChange={(e) => onChange('phone_mobile', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['phone_office']}</label>
+                                    <input type="text" value={data['phone_office'] || ''} onChange={(e) => onChange('phone_office', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['email']}</label>
+                                    <input type="email" value={data['email'] || ''} onChange={(e) => onChange('email', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+                                
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['address']}</label>
+                                    <input type="text" value={data['address'] || ''} onChange={(e) => onChange('address', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+                                
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['website']}</label>
+                                    <input type="text" value={data['website'] || ''} onChange={(e) => onChange('website', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold uppercase tracking-wider mb-1 text-slate-500">{FIELD_LABELS['notes']}</label>
+                                    <textarea value={data['notes'] || ''} onChange={(e) => onChange('notes', e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-slate-700 text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all" rows={3} />
+                                </div>
+                            </div>
+
                             <AiAssistant data={data} apiKey={apiKey} />
                         </div>
                         <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-3 justify-end sticky bottom-0 z-10">
@@ -898,7 +963,8 @@ If data is missing, leave string empty. Preserve Traditional Chinese.`;
                     const data = await response.json();
                     if (data.error) throw new Error(data.error.message);
                     
-                    const parsedData = JSON.parse(data.candidates[0].content.parts[0].text);
+                    // 優化邏輯：使用安全解析器
+                    const parsedData = parseAIResponse(data.candidates[0].content.parts[0].text);
                     setCurrentData({ ...DEFAULT_SCHEMA, ...parsedData });
                     setView('edit');
                 } catch (err) {
@@ -1056,7 +1122,9 @@ Merge these new fields into the original objects. Return the COMPLETE, updated J
                 });
                 const resData = await response.json();
                 if (resData.error) throw new Error(resData.error.message);
-                return JSON.parse(resData.candidates[0].content.parts[0].text);
+                
+                // 優化邏輯：使用安全解析器
+                return parseAIResponse(resData.candidates[0].content.parts[0].text);
             };
 
             const extractCardsWithGemini = async (data, type) => {
@@ -1071,7 +1139,9 @@ Merge these new fields into the original objects. Return the COMPLETE, updated J
                 });
                 const resData = await response.json();
                 if (resData.error) throw new Error(resData.error.message);
-                return JSON.parse(resData.candidates[0].content.parts[0].text);
+                
+                // 優化邏輯：使用安全解析器
+                return parseAIResponse(resData.candidates[0].content.parts[0].text);
             };
 
             const handleCloudSync = async () => {
@@ -1157,10 +1227,10 @@ Merge these new fields into the original objects. Return the COMPLETE, updated J
             };
 
             return (
-                <div className="min-h-[100dvh] bg-slate-50 font-sans flex flex-col text-slate-800">
+                <div className="min-h-[100dvh] bg-slate-50 font-sans flex flex-col text-slate-800 relative">
                     <input type="file" accept="image/*" capture="environment" ref={fileInputRef} className="hidden" onChange={(e) => e.target.files?.[0] && processImage(e.target.files[0])} />
                     
-                    <header className={`${APP_CONFIG.themeColor} text-white shadow-md sticky top-0 z-50`} style={{ paddingTop: 'max(env(safe-area-inset-top, 60px), 60px)' }}>
+                    <header className={`${APP_CONFIG.themeColor} text-white shadow-md sticky top-0 z-40`} style={{ paddingTop: 'max(env(safe-area-inset-top, 60px), 60px)' }}>
                         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
                             <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('dashboard')}>
                                 <img src={APP_CONFIG.logoUrl} alt="Logo" className="h-10 w-auto" />
@@ -1176,18 +1246,29 @@ Merge these new fields into the original objects. Return the COMPLETE, updated J
                         </div>
                     </header>
 
-                    <main className="flex-1 w-full max-w-7xl mx-auto py-6 px-4">
-                        {error && (
-                            <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded shadow-sm flex justify-between items-center animate-fade-in">
-                                <div className="flex items-center text-red-700 whitespace-pre-line text-sm"><span className="font-bold mr-2">錯誤：</span> {error}</div>
-                                <button onClick={() => setError('')}><X size={18} className="text-red-400 hover:text-red-600 transition" /></button>
-                            </div>
-                        )}
-                        {successMsg && (
-                            <div className="bg-green-50 border-l-4 border-green-500 p-4 mb-6 rounded shadow-sm flex items-center animate-fade-in text-sm">
-                                <Check size={18} className="mr-2 text-green-600" /> <span className="text-green-700">{successMsg}</span>
-                            </div>
-                        )}
+                    <main className="flex-1 w-full max-w-7xl mx-auto py-6 px-4 relative">
+                        
+                        {/* --- 優化 UX：浮動 Toast 通知系統 --- */}
+                        <div className="fixed top-[80px] left-1/2 transform -translate-x-1/2 z-50 w-[90%] max-w-md flex flex-col gap-3 pointer-events-none">
+                            {error && (
+                                <div className="bg-white border-l-4 border-red-500 p-4 rounded-xl shadow-xl flex justify-between items-start animate-fade-in pointer-events-auto ring-1 ring-black/5">
+                                    <div className="flex items-start text-slate-700 whitespace-pre-line text-sm">
+                                        <div className="bg-red-100 text-red-600 p-1.5 rounded-full mr-3 shrink-0 mt-0.5"><X size={14} /></div>
+                                        <div>
+                                            <span className="font-bold text-red-600 block mb-1">系統提示</span>
+                                            {error}
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setError('')} className="text-slate-400 hover:text-slate-600 ml-3 shrink-0 p-1"><X size={16} /></button>
+                                </div>
+                            )}
+                            {successMsg && (
+                                <div className="bg-white border-l-4 border-green-500 p-4 rounded-xl shadow-xl flex items-center animate-fade-in pointer-events-auto ring-1 ring-black/5">
+                                    <div className="bg-green-100 text-green-600 p-1.5 rounded-full mr-3 shrink-0"><Check size={14} /></div>
+                                    <span className="text-slate-700 text-sm font-medium">{successMsg}</span>
+                                </div>
+                            )}
+                        </div>
 
                         {loading && (
                             <div className="flex flex-col items-center justify-center py-20 text-slate-600">
