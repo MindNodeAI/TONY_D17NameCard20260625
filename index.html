@@ -13,13 +13,15 @@
 
     <title>名片辨識 APP - TONY STUDIO</title>
     
+    <!-- Tailwind CSS & Babel -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- 解析 Excel 與 Word 用的庫 -->
+    <!-- 解析 Excel 與 Word 用的外部函式庫 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 
+    <!-- React & Lucide Icons Import Map -->
     <script type="importmap">
     {
         "imports": {
@@ -48,7 +50,7 @@
             overflow-y: auto; 
         }
 
-        /* 3. 橫屏遮罩 */
+        /* 3. 行動裝置橫屏提示遮罩 */
         #landscape-warning { display: none; }
         @media screen and (max-width: 768px) and (orientation: landscape) {
             #landscape-warning {
@@ -61,6 +63,7 @@
 </head>
 <body class="bg-slate-50 text-slate-800">
 
+    <!-- 橫向螢幕提示 -->
     <div id="landscape-warning">
         <div class="text-4xl mb-4">📱↻</div>
         <h2 class="text-xl font-bold mb-2">建議使用直向瀏覽</h2>
@@ -70,18 +73,25 @@
         </button>
     </div>
 
+    <!-- React 掛載根節點 -->
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Camera, Upload, Settings, Save, User, FileText, Download, X, Check, Loader2, Search, HelpCircle, ExternalLink, CloudLightning, Sparkles, Lightbulb, Copy, MessageSquare, Image as ImageIcon, Mail, Database, UploadCloud, RefreshCw, FilePlus, MapPin, Tag, Eye, EyeOff, ShieldAlert, Users, FileBarChart, LogOut, ArrowLeft, Trash2, Key } from 'lucide-react';
+        import { 
+            Camera, Upload, Settings, Save, User, FileText, Download, X, Check, 
+            Loader2, Search, CloudLightning, Sparkles, Lightbulb, Copy, 
+            Image as ImageIcon, Mail, Database, UploadCloud, RefreshCw, FilePlus, 
+            MapPin, Tag, Eye, EyeOff, ShieldAlert, Users, FileBarChart, LogOut, 
+            ArrowLeft, Trash2, Key, Cpu, ExternalLink, ZoomIn
+        } from 'lucide-react';
 
-        // --- Firebase Init ---
+        // --- Firebase SDK 初始化 ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, getDocs, query, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { getStorage, ref, uploadString, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getStorage, ref, uploadString, getDownloadURL, listAll } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyDZv3x12RuMke6eEg8qB88Uv5vuuF_PrD0",
@@ -95,19 +105,55 @@
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
+        const googleProvider = new GoogleAuthProvider();
+        googleProvider.setCustomParameters({ prompt: 'select_account' });
         const db = getFirestore(app);
         const storage = getStorage(app);
         const MASTER_ADMIN_EMAIL = 'mindnodeai@gmail.com';
+        const ACTIVE_APP_ID = 'd17-business-card-recognition';
+        const API_KEY_PORTAL_URL = 'https://aistudio.google.com/app/apikey';
 
+        // --- 全域應用程式設定 ---
         const APP_CONFIG = {
             title: "名片辨識 APP",
-            version: "4.0 (SaaS Enterprise Pro)", 
+            version: "4.3 (SaaS Enterprise Pro)", 
             themeColor: "bg-slate-800",
             logoUrl: "https://i.postimg.cc/fT2sQW09/1.png",
             profileUrl: "https://i.postimg.cc/Gh8Zt7SX/S_56844323.jpg",
             copyright: "© 2026 TONY STUDIO. 本教材由 TONY STUDIO 楊文澤顧問設計. All Rights Reserved."
         };
 
+        // --- Gemini 模型設定 (採用 gemini-4-hydrogen) ---
+        const DEFAULT_MODEL = "gemini-4-hydrogen";
+        const GEMINI_MODELS = [
+            { id: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen (預設主力・高速精準)" },
+            { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (穩定備援)" }
+        ];
+
+        // 取得要查詢的 App ID 清單 (相容正式環境與預覽環境路徑)
+        const getCandidateAppIds = () => {
+            const ids = [ACTIVE_APP_ID];
+            if (typeof __app_id !== 'undefined' && __app_id && !ids.includes(__app_id)) {
+                ids.push(__app_id);
+            }
+            return ids;
+        };
+
+        // 相容不同版本的圖片欄位名稱
+        const getCardImageField = (card) => {
+            if (!card) return null;
+            return card.imageUrl || card.image || card.photoUrl || card.cardImage || card.imgUrl || null;
+        };
+
+        // 清理 undefined 與內部暫存欄位，避免 Firestore setDoc 寫入失敗
+        const sanitizeForFirestore = (obj) => {
+            const cleaned = JSON.parse(JSON.stringify(obj));
+            delete cleaned._ownerUid;
+            delete cleaned._appId;
+            return cleaned;
+        };
+
+        // --- 名片資料預設結構 ---
         const DEFAULT_SCHEMA = {
             name: "", name_eng: "", title: "", company: "", phone_mobile: "", phone_office: "", email: "", address: "", website: "", notes: "",
             meetDate: new Date().toISOString().split('T')[0], 
@@ -125,6 +171,7 @@
             email: "Email", address: "地址", website: "網站", meetDate: "認識日期", meetContext: "互動情境(哪裡認識)", notes: "備註", capture_date: "建檔時間"
         };
 
+        // --- 工具函式：檔案轉 Base64 ---
         const fileToBase64 = (file) => new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.readAsDataURL(file);
@@ -132,6 +179,7 @@
             reader.onerror = reject;
         });
 
+        // --- 工具函式：前端圖片壓縮 ---
         const compressImage = (file, maxWidth = 1200, quality = 0.8) => new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.readAsDataURL(file);
@@ -156,13 +204,16 @@
             reader.onerror = reject;
         });
 
+        // --- 工具函式：匯出 JSON ---
         const downloadJSON = (data) => {
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a'); link.href = url; link.download = `business_cards_backup_${new Date().toISOString().slice(0,10)}.json`;
             document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            URL.revokeObjectURL(url);
         };
 
+        // --- 工具函式：匯出 CSV (含 UTF-8 BOM 防亂碼) ---
         const downloadCSV = (data, filename = 'export', headersMap = EXPORT_HEADERS) => {
             const keys = Object.keys(headersMap);
             const csvContent = [
@@ -174,14 +225,19 @@
                     return `"${val}"`;
                 }).join(','))
             ].join('\n');
-            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' }); // BOM added here
+            const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a'); link.setAttribute('href', url); link.setAttribute('download', `${filename}_${new Date().toISOString().slice(0,10)}.csv`);
             document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            URL.revokeObjectURL(url);
         };
 
-        const downloadExcel = (data) => {
-            if (typeof XLSX === 'undefined') { alert("Excel 模組未載入"); return; }
+        // --- 工具函式：匯出 Excel (使用非阻斷錯誤回呼取代 alert) ---
+        const downloadExcel = (data, onError) => {
+            if (typeof XLSX === 'undefined') { 
+                if (onError) onError("Excel 模組尚未載入完成，請稍候再試。");
+                return; 
+            }
             const keys = Object.keys(EXPORT_HEADERS);
             const exportData = data.map(row => {
                 let newRow = {};
@@ -198,6 +254,7 @@
             XLSX.writeFile(workbook, `business_cards_export_${new Date().toISOString().slice(0,10)}.xlsx`);
         };
 
+        // --- 工具函式：匯出 Word (.doc) ---
         const exportWord = (htmlContent, filename) => {
             const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>AI Analysis Report</title></head><body>";
             const footer = "</body></html>";
@@ -210,8 +267,10 @@
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            URL.revokeObjectURL(url);
         };
 
+        // --- 工具函式：安全解析 AI JSON 回應 ---
         const parseAIResponse = (text) => {
             try {
                 const cleanText = text.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
@@ -222,13 +281,14 @@
             }
         };
 
+        // --- 基礎 UI 元件 ---
         const Card = ({ children, className = "", onClick }) => (
             <div onClick={onClick} className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden ${className}`}>
                 {children}
             </div>
         );
 
-        const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, icon: Icon }) => {
+        const Button = ({ children, onClick, type = 'button', variant = 'primary', className = '', disabled = false, icon: Icon }) => {
             const baseStyle = "flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed";
             const variants = {
                 primary: "bg-slate-800 text-white hover:bg-slate-700 shadow-md",
@@ -239,14 +299,15 @@
                 ghost: "bg-transparent text-slate-600 hover:bg-slate-100"
             };
             return (
-                <button type="button" onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant] || variants.primary} ${className}`}>
+                <button type={type} onClick={onClick} disabled={disabled} className={`${baseStyle} ${variants[variant] || variants.primary} ${className}`}>
                     {Icon && <Icon size={18} className="mr-2" />}
                     {children}
                 </button>
             );
         };
 
-        const AuthView = ({ onAuthSuccess, onError, onSuccessMsg }) => {
+        // --- 登入 / 註冊 / 忘記密碼視圖 ---
+        const AuthView = ({ onError, onSuccessMsg }) => {
             const [mode, setMode] = useState('login'); // login, register, forgot
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
@@ -255,7 +316,51 @@
             const [showPassword, setShowPassword] = useState(false);
             const [loading, setLoading] = useState(false);
 
-            const activeAppId = typeof __app_id !== 'undefined' ? __app_id : 'd17-business-card-recognition';
+            const activeAppId = ACTIVE_APP_ID;
+
+            // Google 帳號快速登入 / 註冊
+            const handleGoogleLogin = async () => {
+                setLoading(true);
+                try {
+                    const result = await signInWithPopup(auth, googleProvider);
+                    const user = result.user;
+                    const isMasterAdmin = (user.email || '').toLowerCase() === MASTER_ADMIN_EMAIL.toLowerCase();
+                    const profileRef = doc(db, 'artifacts', activeAppId, 'public', 'data', 'userProfiles', user.uid);
+                    const profileSnap = await getDoc(profileRef);
+
+                    if (!profileSnap.exists()) {
+                        await setDoc(profileRef, {
+                            email: user.email || '',
+                            realName: user.displayName || (user.email ? user.email.split('@')[0] : 'Google 用戶'),
+                            identity: mode === 'register' ? identity : 'visitor',
+                            role: isMasterAdmin ? 'admin' : 'user',
+                            authProvider: 'google',
+                            createdAt: new Date().toISOString(),
+                            loginCount: 1,
+                            status: 'active'
+                        });
+                    } else if (mode === 'register' && identity === 'student') {
+                        await setDoc(profileRef, { identity: 'student' }, { merge: true });
+                    }
+                    onSuccessMsg(`歡迎回來，${user.displayName || user.email}！`);
+                } catch (err) {
+                    console.error("Google 登入錯誤:", err);
+                    let msg = "Google 登入失敗";
+                    if (err.code === 'auth/popup-closed-by-user') {
+                        msg = "您已關閉 Google 登入視窗。";
+                    } else if (err.code === 'auth/popup-blocked') {
+                        msg = "瀏覽器攔截了彈跳視窗，請允許彈跳視窗後重試。";
+                    } else if (err.code === 'auth/unauthorized-domain') {
+                        msg = "目前網域尚未加入 Firebase 授權清單（請至 Firebase Console > Authentication > Settings > Authorized domains 新增此網域）。";
+                    } else if (err.code === 'auth/operation-not-allowed') {
+                        msg = "尚未在 Firebase 後台啟用 Google 登入方式（請至 Authentication > Sign-in method 開啟 Google）。";
+                    } else {
+                        msg += ` (${err.message})`;
+                    }
+                    onError(msg);
+                    setLoading(false);
+                }
+            };
 
             const handleRegister = async (e) => {
                 e.preventDefault();
@@ -265,7 +370,7 @@
                     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
                     const user = userCredential.user;
                     
-                    // Create Profile
+                    // 建立會員 Profile
                     const isMasterAdmin = email.toLowerCase() === MASTER_ADMIN_EMAIL.toLowerCase();
                     const profileRef = doc(db, 'artifacts', activeAppId, 'public', 'data', 'userProfiles', user.uid);
                     await setDoc(profileRef, {
@@ -278,9 +383,9 @@
                         status: 'active'
                     });
 
-                    // Send Verification
+                    // 寄送驗證信並登出等候驗證
                     await sendEmailVerification(user);
-                    await signOut(auth); // Force logout until verified
+                    await signOut(auth);
                     onSuccessMsg("註冊成功！請至信箱點擊驗證連結後方可登入。(溫馨提醒：註冊確認信有時會跑到「垃圾郵件匣」，請記得前往確認唷！)");
                     setMode('login');
                     setPassword('');
@@ -306,13 +411,12 @@
                         setLoading(false);
                         return;
                     }
-
-                    // Auth success is handled by the global onAuthStateChanged listener in App.
+                    // 驗證成功後將由 App 內的 onAuthStateChanged 自動接手導向主畫面
                 } catch (err) {
                     let msg = "登入失敗";
                     if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') msg = "信箱或密碼錯誤。";
                     onError(msg);
-                    setLoading(false); // Only stop loading if error, otherwise let listener take over
+                    setLoading(false);
                 }
             };
 
@@ -340,6 +444,31 @@
                             </p>
                         </div>
 
+                        {(mode === 'login' || mode === 'register') && (
+                            <div className="mb-6">
+                                <button
+                                    type="button"
+                                    onClick={handleGoogleLogin}
+                                    disabled={loading}
+                                    className="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-50 text-slate-700 font-bold py-3 px-4 rounded-lg border border-slate-300 shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <svg className="w-5 h-5" viewBox="0 0 24 24">
+                                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                                    </svg>
+                                    <span>使用 Google 帳號快速{mode === 'register' ? '註冊 / 登入' : '登入'}</span>
+                                </button>
+
+                                <div className="relative flex py-4 items-center">
+                                    <div className="flex-grow border-t border-slate-200"></div>
+                                    <span className="flex-shrink mx-3 text-xs text-slate-400 font-medium">或使用電子信箱</span>
+                                    <div className="flex-grow border-t border-slate-200"></div>
+                                </div>
+                            </div>
+                        )}
+
                         {mode === 'login' && (
                             <form onSubmit={handleLogin} className="space-y-5">
                                 <div>
@@ -355,7 +484,7 @@
                                         </button>
                                     </div>
                                 </div>
-                                <Button variant="primary" className="w-full py-3" onClick={handleLogin} disabled={loading}>
+                                <Button type="submit" variant="primary" className="w-full py-3" disabled={loading}>
                                     {loading ? <Loader2 size={18} className="animate-spin" /> : '登入系統 Login'}
                                 </Button>
                                 <div className="flex justify-between text-sm mt-4">
@@ -396,7 +525,7 @@
                                     💡 <strong>溫馨提醒：</strong>為確保帳號安全，註冊後系統會發送確認信。信件有時會跑到<strong>「垃圾郵件匣」</strong>，請記得前往確認唷！
                                 </div>
 
-                                <Button variant="primary" className="w-full py-3" onClick={handleRegister} disabled={loading}>
+                                <Button type="submit" variant="primary" className="w-full py-3" disabled={loading}>
                                     {loading ? <Loader2 size={18} className="animate-spin" /> : '建立帳號 Register'}
                                 </Button>
                                 <div className="text-center text-sm mt-4">
@@ -414,7 +543,7 @@
                                 <div className="bg-orange-50 border border-orange-200 text-orange-800 p-3 rounded-lg text-xs leading-relaxed">
                                     💡 <strong>溫馨提醒：</strong>重置信有時會跑到<strong>「垃圾郵件匣」</strong>，請留意。
                                 </div>
-                                <Button variant="primary" className="w-full py-3" onClick={handleForgot} disabled={loading}>
+                                <Button type="submit" variant="primary" className="w-full py-3" disabled={loading}>
                                     {loading ? <Loader2 size={18} className="animate-spin" /> : '發送重置信件'}
                                 </Button>
                                 <div className="text-center text-sm mt-4">
@@ -429,7 +558,8 @@
             );
         };
 
-        const AdminDashboardView = ({ onBack, currentProfile, onError, onSuccessMsg, onEnterUserHistory, apiKey }) => {
+        // --- SaaS 管理者後台視圖 ---
+        const AdminDashboardView = ({ onBack, currentProfile, onError, onSuccessMsg, onEnterUserHistory, apiKey, modelName }) => {
             const [users, setUsers] = useState([]);
             const [loading, setLoading] = useState(true);
             const [reportLoading, setReportLoading] = useState(false);
@@ -440,7 +570,7 @@
             const [confirmingRoleUid, setConfirmingRoleUid] = useState(null);
             const [confirmingDeleteUid, setConfirmingDeleteUid] = useState(null);
             
-            const activeAppId = typeof __app_id !== 'undefined' ? __app_id : 'd17-business-card-recognition';
+            const activeAppId = ACTIVE_APP_ID;
 
             useEffect(() => {
                 fetchUsers();
@@ -451,9 +581,9 @@
                 try {
                     const snapshot = await getDocs(collection(db, 'artifacts', activeAppId, 'public', 'data', 'userProfiles'));
                     const userList = [];
-                    snapshot.forEach(doc => {
-                        if(doc.data().status !== 'deleted') {
-                            userList.push({ uid: doc.id, ...doc.data() });
+                    snapshot.forEach(docSnap => {
+                        if (docSnap.data().status !== 'deleted') {
+                            userList.push({ uid: docSnap.id, ...docSnap.data() });
                         }
                     });
                     userList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -521,12 +651,11 @@
                 setReportLoading(true);
                 setReportResult('');
                 try {
-                    // 1. Fetch all cards for all users within date range
                     let allCards = [];
                     for (const user of users) {
                         const cardsSnapshot = await getDocs(collection(db, 'artifacts', activeAppId, 'users', user.uid, 'business_cards'));
-                        cardsSnapshot.forEach(doc => {
-                            const data = doc.data();
+                        cardsSnapshot.forEach(docSnap => {
+                            const data = docSnap.data();
                             const dateCheck = data.meetDate || data.capture_date?.split('T')[0];
                             if (dateCheck && dateCheck >= startDate && dateCheck <= endDate) {
                                 allCards.push({
@@ -542,12 +671,10 @@
                         return onError("該期間內沒有任何名片新增紀錄，無法產生報告。");
                     }
 
-                    // 2. Prepare JSON summary to save tokens
                     const summary = allCards.map(c => ({
                         聯絡人: c.name, 公司: c.company, 職稱: c.title, 產業推測: c.aiInsights?.industry, 情境: c.meetContext, 標籤: c.tags?.join(','), 建立者: c.ownerName
                     }));
 
-                    // 3. Call Gemini
                     const prompt = `您是頂級的商務關係智能分析師。我將提供一段時間內系統收集到的名片摘要(JSON格式)。
 請以繁體中文撰寫一份專業的「商務人脈累積與趨勢分析報告」。
 請包含以下章節，並使用 HTML 標籤排版 (如 <h1>, <h2>, <ul>, <p>, <strong>，請勿使用 Markdown \`\`\` 等符號，直接輸出純 HTML)：
@@ -560,7 +687,7 @@
 數據：
 ${JSON.stringify(summary)}`;
 
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
                     });
@@ -569,7 +696,6 @@ ${JSON.stringify(summary)}`;
                     if (resultData.error) throw new Error(resultData.error.message);
                     
                     let htmlContent = resultData.candidates[0].content.parts[0].text;
-                    // Clean up markdown block if API still returned it despite instructions
                     htmlContent = htmlContent.replace(/```html/gi, '').replace(/```/g, '').trim();
                     setReportResult(htmlContent);
                     onSuccessMsg("分析報告生成完畢！");
@@ -714,12 +840,14 @@ ${JSON.stringify(summary)}`;
             );
         };
 
-        const SettingsView = ({ apiKey, setApiKey, scriptUrl, setScriptUrl, onBack, onLogout, profile }) => {
-            const [showHelp, setShowHelp] = useState(false);
+        // --- 系統設定視圖 ---
+        const SettingsView = ({ apiKey, setApiKey, modelName, setModelName, scriptUrl, setScriptUrl, onBack, onLogout, profile }) => {
+            const [showApiKey, setShowApiKey] = useState(false);
+
             return (
                 <div className="max-w-2xl mx-auto p-6 animate-fade-in pb-20">
                     <Card className="p-6 mb-6 bg-indigo-50 border-indigo-100">
-                        <div className="flex justify-between items-center">
+                        <div className="flex justify-between items-center flex-wrap gap-4">
                             <div>
                                 <h3 className="font-bold text-indigo-900 text-lg">帳號資訊</h3>
                                 <p className="text-sm text-indigo-700 mt-1">{profile?.realName} ({profile?.email}) - 身分: {profile?.identity === 'student' ? '學員' : '訪客'}</p>
@@ -733,20 +861,72 @@ ${JSON.stringify(summary)}`;
                         </h2>
                         <div className="space-y-6">
                             <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm mb-4">
-                                💡 提示：API 設定會自動儲存在此裝置的瀏覽器中。
+                                💡 提示：API 金鑰與模型設定會自動安全儲存在您目前裝置的瀏覽器本機中，不會上傳至公開伺服器。
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-2">Google Gemini API Key (必填)</label>
-                                <input 
-                                    type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-                                    placeholder="輸入您的 AI Studio Key..."
-                                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 outline-none"
-                                />
+                                <div className="flex flex-wrap justify-between items-center gap-2 mb-2">
+                                    <label className="block text-sm font-bold text-slate-700">
+                                        Google Gemini API Key (必填)
+                                    </label>
+                                    <a 
+                                        href={API_KEY_PORTAL_URL} 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center text-xs font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3 py-1.5 rounded-full transition-colors"
+                                    >
+                                        <Key size={13} className="mr-1.5" />
+                                        點此前往 Google AI Studio 免費申請 API Key
+                                        <ExternalLink size={13} className="ml-1" />
+                                    </a>
+                                </div>
+                                <div className="relative">
+                                    <input 
+                                        type={showApiKey ? "text" : "password"} 
+                                        value={apiKey} 
+                                        onChange={(e) => setApiKey(e.target.value.trim())}
+                                        placeholder="貼上您的 AIzaSy... 開頭金鑰"
+                                        className="w-full p-3 pr-10 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm"
+                                    />
+                                    <button 
+                                        type="button" 
+                                        onClick={() => setShowApiKey(!showApiKey)} 
+                                        className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                                        title={showApiKey ? "隱藏金鑰" : "顯示金鑰"}
+                                    >
+                                        {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                                    </button>
+                                </div>
+
+                                {/* API Key 申請步驟說明卡 */}
+                                <div className="mt-3 p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600 space-y-1.5">
+                                    <div className="font-bold text-slate-700 flex items-center">
+                                        🔑 如何快速取得 Gemini API Key？
+                                    </div>
+                                    <ol className="list-decimal list-inside space-y-1 text-slate-600">
+                                        <li>點擊上方按鈕前往 <a href={API_KEY_PORTAL_URL} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline font-medium hover:text-indigo-800">Google AI Studio 金鑰管理頁面</a> 並登入 Google 帳號。</li>
+                                        <li>點擊畫面右上角的 <strong>「Create API key」</strong>（建立 API 金鑰）。</li>
+                                        <li>複製產生的金鑰字串，貼回上方輸入框並點擊下方「確認並返回」即可開始辨識！</li>
+                                    </ol>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center">
+                                    <Cpu size={16} className="mr-1.5 text-indigo-600" /> AI 辨識與分析模型版本
+                                </label>
+                                <select 
+                                    value={modelName} 
+                                    onChange={(e) => setModelName(e.target.value)}
+                                    className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 outline-none bg-white text-slate-700 font-mono text-sm"
+                                >
+                                    {GEMINI_MODELS.map(m => (
+                                        <option key={m.id} value={m.id}>{m.label} ({m.id})</option>
+                                    ))}
+                                </select>
                             </div>
                             <div className="pt-4 border-t border-slate-100">
                                 <div className="flex justify-between items-center mb-2">
                                     <label className="block text-sm font-medium text-slate-700 flex items-center">
-                                        <CloudLightning size={16} className="mr-1 text-green-600" /> Google Apps Script URL (雲端備份用)
+                                        <CloudLightning size={16} className="mr-1 text-green-600" /> Google Apps Script URL (選填・舊版雲端備份用)
                                     </label>
                                 </div>
                                 <input type="text" value={scriptUrl} onChange={(e) => setScriptUrl(e.target.value)} placeholder="https://script.google.com/macros/s/..../exec" className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-500 outline-none font-mono text-sm" />
@@ -760,6 +940,7 @@ ${JSON.stringify(summary)}`;
             );
         };
 
+        // --- 關於創作者視圖 ---
         const AboutView = ({ onBack }) => {
             return (
                 <div className="max-w-4xl mx-auto p-6 animate-fade-in pb-20">
@@ -789,7 +970,8 @@ ${JSON.stringify(summary)}`;
             );
         };
 
-        const AiAssistant = ({ data, apiKey, onError }) => {
+        // --- AI 智能軍師元件 (開發信與破冰話題) ---
+        const AiAssistant = ({ data, apiKey, modelName, onError }) => {
             const [aiResult, setAiResult] = useState(null); 
             const [aiLoading, setAiLoading] = useState(false);
             const [activeTab, setActiveTab] = useState(null); 
@@ -801,11 +983,11 @@ ${JSON.stringify(summary)}`;
                 setAiLoading(true); setActiveTab(type); setAiResult(null); setCopied(false);
 
                 let prompt = type === 'email' 
-                    ? `Act as a top-tier business secretary. Write a professional follow-up email in Traditional Chinese to: Name: ${data.name}, Title: ${data.title}, Company: ${data.company}. Tone: Warm, professional. Output Format: Subject: [Subject] Body: [Body]`
-                    : `Act as a networking coach. Analyze this person: ${data.title} at ${data.company}. OUTPUT FORMAT: Subject: 🔍 職涯與話題分析 Body: 【職責推測】[Analysis] 【破冰三招】1. [Topic 1] 2. [Topic 2] 3. [Topic 3]`;
+                    ? `Act as a top-tier business secretary. Write a professional follow-up email in Traditional Chinese to: Name: ${data.name}, Title: ${data.title}, Company: ${data.company}. Context: ${data.meetContext || 'Business meeting'}. Tone: Warm, professional. Output Format: Subject: [Subject] Body: [Body]`
+                    : `Act as a networking coach. Analyze this person in Traditional Chinese: ${data.title} at ${data.company}. OUTPUT FORMAT: Subject: 🔍 職涯與話題分析 Body: 【職責推測】[Analysis] 【破冰三招】1. [Topic 1] 2. [Topic 2] 3. [Topic 3]`;
 
                 try {
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
                     });
@@ -823,14 +1005,27 @@ ${JSON.stringify(summary)}`;
                 } finally { setAiLoading(false); }
             };
 
-            const copyToClipboard = () => {
+            const copyToClipboard = async () => {
                 if (!aiResult) return;
                 const textToCopy = `主旨：${aiResult.subject}\n\n${aiResult.body}`;
-                const textArea = document.createElement("textarea"); textArea.value = textToCopy; textArea.style.position = "fixed"; textArea.style.left = "-9999px";
-                document.body.appendChild(textArea); textArea.select();
-                try { document.execCommand('copy'); setCopied(true); setTimeout(() => setCopied(false), 2000); } 
-                catch (err) { onError("複製失敗。"); }
-                document.body.removeChild(textArea);
+                try {
+                    if (navigator.clipboard && window.isSecureContext) {
+                        await navigator.clipboard.writeText(textToCopy);
+                    } else {
+                        const textArea = document.createElement("textarea");
+                        textArea.value = textToCopy;
+                        textArea.style.position = "fixed";
+                        textArea.style.left = "-9999px";
+                        document.body.appendChild(textArea);
+                        textArea.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(textArea);
+                    }
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                } catch (err) {
+                    onError("複製失敗，請手動選取文字複製。");
+                }
             };
 
             return (
@@ -864,7 +1059,7 @@ ${JSON.stringify(summary)}`;
                                         <p className="whitespace-pre-wrap text-sm text-slate-700 leading-relaxed font-sans">{aiResult.body}</p>
                                     </div>
                                     <div className="bg-slate-50 px-4 py-3 border-t border-slate-200 flex justify-end">
-                                        <button onClick={copyToClipboard} className={`flex items-center px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${copied ? "bg-green-100 text-green-700" : "bg-slate-800 text-white hover:bg-slate-700 shadow"}`}>
+                                        <button type="button" onClick={copyToClipboard} className={`flex items-center px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${copied ? "bg-green-100 text-green-700" : "bg-slate-800 text-white hover:bg-slate-700 shadow"}`}>
                                             {copied ? <Check size={16} className="mr-2" /> : <Copy size={16} className="mr-2" />} {copied ? "已複製成功！" : "複製全部內容"}
                                         </button>
                                     </div>
@@ -876,16 +1071,85 @@ ${JSON.stringify(summary)}`;
             );
         };
 
-        const EditView = ({ data, imagePreview, onSave, onCancel, onChange, isSaving, apiKey, onError, readonly = false }) => (
+        // --- 名片編輯與檢視視圖 ---
+        const EditView = ({ data, imagePreview, onImageResolved, currentUid, onSave, onCancel, onChange, isSaving, apiKey, modelName, onError, readonly = false }) => {
+            const [checkingStorage, setCheckingStorage] = useState(false);
+            const [zoomOpen, setZoomOpen] = useState(false);
+
+            // 若紀錄缺少 imageUrl，自動嘗試從 Firebase Storage 依卡片 ID 找回圖檔
+            useEffect(() => {
+                let cancelled = false;
+                const tryFetchFromStorage = async () => {
+                    if (imagePreview || !data?.id) return;
+                    const ownerUid = data._ownerUid || currentUid;
+                    if (!ownerUid) return;
+                    setCheckingStorage(true);
+                    const appIds = data._appId ? [data._appId, ...getCandidateAppIds()] : getCandidateAppIds();
+                    const uniqueAppIds = [...new Set(appIds)];
+
+                    for (const appId of uniqueAppIds) {
+                        for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
+                            try {
+                                const imgRef = ref(storage, `artifacts/${appId}/users/${ownerUid}/images/${data.id}.${ext}`);
+                                const url = await getDownloadURL(imgRef);
+                                if (!cancelled && url) {
+                                    if (onImageResolved) onImageResolved(url, data.id, ownerUid, appId);
+                                    setCheckingStorage(false);
+                                    return;
+                                }
+                            } catch (_) {
+                                // 該路徑無對應副檔名圖檔，繼續嘗試下一個
+                            }
+                        }
+                    }
+                    if (!cancelled) setCheckingStorage(false);
+                };
+                tryFetchFromStorage();
+                return () => { cancelled = true; };
+            }, [data?.id, imagePreview, currentUid]);
+
+            return (
             <div className="max-w-6xl mx-auto p-4 md:p-6 animate-fade-in flex flex-col md:flex-row gap-6 pb-20">
+                {zoomOpen && imagePreview && (
+                    <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-4" onClick={() => setZoomOpen(false)}>
+                        <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+                            <button type="button" onClick={() => setZoomOpen(false)} className="self-end mb-2 bg-white/20 hover:bg-white/40 text-white rounded-full p-2 transition">
+                                <X size={20} />
+                            </button>
+                            <img src={imagePreview} alt="名片放大預覽" className="max-w-full max-h-[82vh] object-contain rounded-lg shadow-2xl bg-white" />
+                        </div>
+                    </div>
+                )}
+
                 <div className="w-full md:w-1/2 flex flex-col">
                     <Card className="flex-1 bg-slate-100 flex items-center justify-center relative p-4 min-h-[300px]">
                         {imagePreview ? (
-                            <img src={imagePreview} alt="Uploaded" crossOrigin="anonymous" className="max-w-full max-h-[60vh] object-contain shadow-lg rounded" />
+                            <div className="relative group flex flex-col items-center">
+                                {/* 移除 crossOrigin="anonymous"，避免 Firebase Storage 預設無 CORS 標頭導致圖片被瀏覽器阻擋 */}
+                                <img 
+                                    src={imagePreview} 
+                                    alt="名片圖檔" 
+                                    onClick={() => setZoomOpen(true)}
+                                    className="max-w-full max-h-[60vh] object-contain shadow-lg rounded cursor-zoom-in" 
+                                />
+                                <button 
+                                    type="button" 
+                                    onClick={() => setZoomOpen(true)} 
+                                    className="mt-3 inline-flex items-center text-xs text-slate-600 hover:text-indigo-600 bg-white/90 px-3 py-1.5 rounded-full shadow-sm border border-slate-200"
+                                >
+                                    <ZoomIn size={14} className="mr-1" /> 點擊放大檢視原圖
+                                </button>
+                            </div>
+                        ) : checkingStorage ? (
+                            <div className="text-center text-slate-500 flex flex-col items-center">
+                                <Loader2 size={40} className="mb-3 animate-spin text-indigo-500" />
+                                <p className="font-medium text-sm">正在從 Firebase Storage 尋找名片圖檔...</p>
+                            </div>
                         ) : (
                             <div className="text-center text-slate-400 flex flex-col items-center">
                                 <ImageIcon size={64} className="mb-3 opacity-50" />
                                 <p className="font-medium text-lg mb-1">歷史紀錄 (無圖片)</p>
+                                <p className="text-xs text-slate-400">此筆為批次匯入或未附帶圖片之紀錄</p>
                             </div>
                         )}
                     </Card>
@@ -983,7 +1247,7 @@ ${JSON.stringify(summary)}`;
                                 </div>
                             </div>
 
-                            <AiAssistant data={data} apiKey={apiKey} onError={onError} />
+                            <AiAssistant data={data} apiKey={apiKey} modelName={modelName} onError={onError} />
                         </div>
                         <div className="p-4 border-t border-slate-100 bg-slate-50 flex gap-3 justify-end sticky bottom-0 z-10">
                             <Button variant="secondary" onClick={onCancel} disabled={isSaving}>取消 / 返回</Button>
@@ -992,12 +1256,73 @@ ${JSON.stringify(summary)}`;
                     </Card>
                 </div>
             </div>
-        );
+            );
+        };
 
-        const HistoryView = ({ history, onBack, onDelete, onSelect, onExportCSV, onExportExcel, viewTitle = "名片資料總表", readonly = false }) => {
+        // --- 總表單列縮圖元件 (支援自動從 Storage 補齊圖片連結) ---
+        const CardThumbnail = ({ item, defaultUid, onPreview, onResolvedUrl }) => {
+            const [imgUrl, setImgUrl] = useState(() => getCardImageField(item));
+            const [failed, setFailed] = useState(false);
+
+            useEffect(() => {
+                setImgUrl(getCardImageField(item));
+                setFailed(false);
+            }, [item.id, item.imageUrl]);
+
+            useEffect(() => {
+                let cancelled = false;
+                if (imgUrl || !item?.id) return;
+                const ownerUid = item._ownerUid || defaultUid;
+                if (!ownerUid) return;
+
+                const lookup = async () => {
+                    const appIds = item._appId ? [item._appId, ...getCandidateAppIds()] : getCandidateAppIds();
+                    for (const appId of [...new Set(appIds)]) {
+                        try {
+                            const url = await getDownloadURL(ref(storage, `artifacts/${appId}/users/${ownerUid}/images/${item.id}.jpg`));
+                            if (!cancelled && url) {
+                                setImgUrl(url);
+                                if (onResolvedUrl) onResolvedUrl(url, item.id, ownerUid, appId);
+                                return;
+                            }
+                        } catch (_) {}
+                    }
+                };
+                lookup();
+                return () => { cancelled = true; };
+            }, [item?.id, imgUrl, defaultUid]);
+
+            if (!imgUrl || failed) {
+                return (
+                    <div className="w-20 h-12 rounded-lg bg-slate-100 border border-slate-200 flex flex-col items-center justify-center text-slate-400 text-[10px]">
+                        <ImageIcon size={16} className="opacity-50" />
+                    </div>
+                );
+            }
+
+            return (
+                <div 
+                    onClick={() => onPreview(imgUrl)} 
+                    className="relative w-20 h-12 rounded-lg overflow-hidden border border-slate-200 shadow-sm cursor-zoom-in group/thumb bg-slate-100"
+                    title="點擊放大檢視名片圖檔"
+                >
+                    <img 
+                        src={imgUrl} 
+                        alt={item.name || "名片縮圖"} 
+                        loading="lazy"
+                        onError={() => setFailed(true)}
+                        className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform" 
+                    />
+                </div>
+            );
+        };
+
+        // --- 名片歷史總表視圖 ---
+        const HistoryView = ({ history, currentUid, onResolvedUrl, onSyncStorage, isSyncingStorage, onBack, onDelete, onSelect, onExportCSV, onExportExcel, viewTitle = "名片資料總表", readonly = false }) => {
             const [searchTerm, setSearchTerm] = useState("");
             const [deletingId, setDeletingId] = useState(null);
             const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false);
+            const [previewModalUrl, setPreviewModalUrl] = useState(null);
 
             const nameCounts = history.reduce((acc, item) => {
                 const n = (item.name || '').trim().toLowerCase();
@@ -1031,6 +1356,18 @@ ${JSON.stringify(summary)}`;
 
             return (
                 <div className="max-w-6xl mx-auto p-4 md:p-6 animate-fade-in flex flex-col h-[calc(100vh-100px)] pb-20">
+                    {/* 名片原圖放大預覽視窗 */}
+                    {previewModalUrl && (
+                        <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-4" onClick={() => setPreviewModalUrl(null)}>
+                            <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+                                <button type="button" onClick={() => setPreviewModalUrl(null)} className="self-end mb-2 bg-white/20 hover:bg-white/40 text-white rounded-full p-2 transition">
+                                    <X size={20} />
+                                </button>
+                                <img src={previewModalUrl} alt="名片預覽" className="max-w-full max-h-[82vh] object-contain rounded-lg shadow-2xl bg-white" />
+                            </div>
+                        </div>
+                    )}
+
                     <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-4">
                         <div>
                             <h2 className="text-2xl font-bold text-slate-800 flex items-center">
@@ -1043,6 +1380,12 @@ ${JSON.stringify(summary)}`;
                         </div>
                         
                         <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
+                            {!readonly && onSyncStorage && (
+                                <Button variant="secondary" onClick={onSyncStorage} disabled={isSyncingStorage} icon={isSyncingStorage ? Loader2 : RefreshCw} className="text-xs py-2 px-3 whitespace-nowrap border-indigo-200 text-indigo-700 hover:bg-indigo-50">
+                                    {isSyncingStorage ? '掃描 Storage 中...' : '掃描 Storage 圖檔'}
+                                </Button>
+                            )}
+
                             {!readonly && <Button variant={showDuplicatesOnly ? 'ai' : 'secondary'} onClick={() => setShowDuplicatesOnly(!showDuplicatesOnly)} className={`text-xs py-2 px-3 whitespace-nowrap ${showDuplicatesOnly ? '' : 'text-violet-700 border-violet-200 hover:bg-violet-50'}`}>
                                 {showDuplicatesOnly ? '取消篩選 (顯示全部)' : '🔍 尋找重複人名'}
                             </Button>}
@@ -1078,15 +1421,24 @@ ${JSON.stringify(summary)}`;
 
                     <Card className="flex-1 flex flex-col overflow-hidden bg-white">
                         {filteredHistory.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center flex-1 py-12 text-slate-500">
+                            <div className="flex flex-col items-center justify-center flex-1 py-12 text-slate-500 px-4 text-center">
                                 <Database size={48} className="mb-4 text-slate-300" />
-                                <p className="text-lg font-medium">{showDuplicatesOnly ? '🎉 恭喜！目前沒有發現重複的聯絡人資料。' : '沒有找到符合的資料'}</p>
+                                <p className="text-lg font-medium mb-2">{showDuplicatesOnly ? '🎉 恭喜！目前沒有發現重複的聯絡人資料。' : '沒有找到符合的名片資料'}</p>
+                                {!readonly && !showDuplicatesOnly && onSyncStorage && (
+                                    <div className="mt-3 max-w-md bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-xs text-indigo-800">
+                                        <p className="mb-3">若您先前辨識的名片圖片已存在 Firebase Storage 中，可點擊下方按鈕直接掃描雲端 Storage 找回所有名片圖檔：</p>
+                                        <Button variant="ai" onClick={onSyncStorage} disabled={isSyncingStorage} icon={isSyncingStorage ? Loader2 : RefreshCw} className="mx-auto text-xs">
+                                            {isSyncingStorage ? '正在掃描 Firebase Storage...' : '立即從 Firebase Storage 掃描找回名片'}
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
                         ) : (
                             <div className="flex-1 overflow-x-auto overflow-y-auto">
-                                <table className="w-full text-left border-collapse min-w-[800px]">
+                                <table className="w-full text-left border-collapse min-w-[900px]">
                                     <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
                                         <tr>
+                                            <th className="px-4 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200 w-24">名片圖檔</th>
                                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">姓名 (中 / 英)</th>
                                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">公司 / 職稱 / 標籤</th>
                                             <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">聯絡方式 / 情境</th>
@@ -1095,7 +1447,15 @@ ${JSON.stringify(summary)}`;
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
                                         {filteredHistory.map((item) => (
-                                            <tr key={item.id} className="hover:bg-slate-50 transition-colors group">
+                                            <tr key={`${item._ownerUid || ''}_${item.id}`} className="hover:bg-slate-50 transition-colors group">
+                                                <td className="px-4 py-4 align-top">
+                                                    <CardThumbnail 
+                                                        item={item} 
+                                                        defaultUid={currentUid} 
+                                                        onPreview={setPreviewModalUrl} 
+                                                        onResolvedUrl={onResolvedUrl} 
+                                                    />
+                                                </td>
                                                 <td className="px-6 py-4 align-top">
                                                     <div className="flex flex-wrap items-baseline gap-x-2">
                                                         <span className="font-bold text-slate-800 text-lg leading-tight">{item.name || '-'}</span>
@@ -1130,7 +1490,7 @@ ${JSON.stringify(summary)}`;
                                                 <td className="px-6 py-4 text-right align-top">
                                                     {deletingId === item.id ? (
                                                         <div className="flex items-center justify-end gap-2 animate-fade-in">
-                                                            <button onClick={() => { onDelete(item.id); setDeletingId(null); }} className="text-xs bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded transition shadow-sm font-bold">確定刪除</button>
+                                                            <button onClick={() => { onDelete(item); setDeletingId(null); }} className="text-xs bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded transition shadow-sm font-bold">確定刪除</button>
                                                             <button onClick={() => setDeletingId(null)} className="text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded transition">取消</button>
                                                         </div>
                                                     ) : (
@@ -1154,11 +1514,40 @@ ${JSON.stringify(summary)}`;
             );
         };
 
-        const DashboardView = ({ onUpload, onCamera, savedCount, onExportCSV, onExportExcel, onExportJSON, onImportJSON, onCloudSync, isSyncing, hasScriptUrl, onOpenHistory, onBulkImport, isImporting, profile }) => {
+        // --- 主控台首頁視圖 ---
+        const DashboardView = ({ onUpload, onCamera, savedCount, onExportCSV, onExportExcel, onExportJSON, onImportJSON, onSyncStorage, isSyncingStorage, onCloudSync, isSyncing, hasScriptUrl, hasApiKey, onOpenSettings, onOpenHistory, onBulkImport, isImporting, profile, linkedAccountNote }) => {
             const fileInputRef = useRef(null);
             const bulkImportRef = useRef(null);
             return (
                 <div className="max-w-4xl mx-auto p-6 animate-fade-in pb-20">
+                    {!hasApiKey && (
+                        <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm">
+                            <div className="text-sm text-amber-900">
+                                <strong className="font-bold flex items-center text-amber-800 mb-1">
+                                    <Key size={16} className="mr-1.5" /> 尚未設定 Gemini API Key
+                                </strong>
+                                開始拍攝或辨識名片前，請先取得免費 API 金鑰並填入系統設定中。
+                            </div>
+                            <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                                <a 
+                                    href={API_KEY_PORTAL_URL} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="flex-1 sm:flex-none inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-bold bg-white text-amber-800 border border-amber-300 hover:bg-amber-100 transition-colors"
+                                >
+                                    前往申請金鑰 <ExternalLink size={13} className="ml-1" />
+                                </a>
+                                <button 
+                                    type="button"
+                                    onClick={onOpenSettings}
+                                    className="flex-1 sm:flex-none inline-flex items-center justify-center px-3 py-2 rounded-lg text-xs font-bold bg-amber-600 text-white hover:bg-amber-700 transition-colors shadow-sm"
+                                >
+                                    前往填寫設定
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                         <Card className="p-6 bg-gradient-to-br from-slate-800 to-slate-700 text-white">
                             <div className="text-slate-300 text-sm font-medium mb-1">本機已同步名片</div>
@@ -1167,12 +1556,15 @@ ${JSON.stringify(summary)}`;
                         <div className="md:col-span-2 flex flex-col justify-center text-slate-600">
                             <h2 className="text-2xl font-bold text-slate-800 mb-2">歡迎回來，{profile?.realName || '使用者'}</h2>
                             <p>身分：{profile?.identity === 'student' ? 'TONY 老師學員' : '一般訪客'} | 權限：{profile?.role === 'admin' ? '管理員' : '一般用戶'}</p>
+                            {linkedAccountNote && (
+                                <p className="mt-1 text-xs text-indigo-600 font-medium">{linkedAccountNote}</p>
+                            )}
                             <p className="mt-2 text-sm text-slate-500">準備好整理您的人脈了嗎？請選擇下方的輸入方式。</p>
                         </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                        <button onClick={onCamera} className="group relative overflow-hidden rounded-2xl bg-white border-2 border-dashed border-slate-300 hover:border-slate-500 p-8 transition-all hover:shadow-lg text-left">
+                        <button type="button" onClick={onCamera} className="group relative overflow-hidden rounded-2xl bg-white border-2 border-dashed border-slate-300 hover:border-slate-500 p-8 transition-all hover:shadow-lg text-left">
                             <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4"><Camera size={24} /></div>
                             <h3 className="text-xl font-bold text-slate-800 mb-1">相機拍攝</h3>
                             <p className="text-slate-500 text-sm">直接使用裝置相機拍攝實體名片。</p>
@@ -1186,13 +1578,9 @@ ${JSON.stringify(summary)}`;
                     </div>
 
                     <div className="flex flex-col sm:flex-row gap-4 mb-8">
-                        {savedCount > 0 && (
-                            <>
-                                <Button variant="secondary" icon={Download} onClick={onExportExcel} className="flex-1 text-sm border-green-200 text-green-700 hover:bg-green-50">匯出 Excel</Button>
-                                <Button variant="secondary" icon={Download} onClick={onExportCSV} className="flex-1 text-sm">匯出 CSV</Button>
-                                <Button variant="primary" icon={Search} onClick={onOpenHistory} className="flex-1 sm:flex-none sm:w-1/3 text-sm">名片資料總表</Button>
-                            </>
-                        )}
+                        <Button variant="secondary" icon={Download} onClick={onExportExcel} disabled={savedCount === 0} className="flex-1 text-sm border-green-200 text-green-700 hover:bg-green-50">匯出 Excel</Button>
+                        <Button variant="secondary" icon={Download} onClick={onExportCSV} disabled={savedCount === 0} className="flex-1 text-sm">匯出 CSV</Button>
+                        <Button variant="primary" icon={Search} onClick={onOpenHistory} className="flex-1 sm:flex-none sm:w-1/3 text-sm">名片資料總表</Button>
                     </div>
 
                     <div className="mt-8 pt-6 border-t border-slate-200">
@@ -1211,6 +1599,15 @@ ${JSON.stringify(summary)}`;
                     <div className="mt-8 pt-6 border-t border-slate-200">
                         <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center"><Database size={16} className="mr-2" /> 資料備份與雲端同步</h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            <Button 
+                                variant="secondary" 
+                                className="w-full text-sm border-indigo-200 text-indigo-700 hover:bg-indigo-50" 
+                                icon={isSyncingStorage ? Loader2 : RefreshCw} 
+                                onClick={onSyncStorage} 
+                                disabled={isSyncingStorage}
+                            >
+                                {isSyncingStorage ? '掃描 Storage 中...' : '掃描 Storage 找回名片'}
+                            </Button>
                             <Button variant="secondary" className="w-full text-sm" icon={Download} onClick={onExportJSON} disabled={savedCount === 0}>備份本機 (JSON)</Button>
                             <div>
                                 <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={onImportJSON} />
@@ -1225,20 +1622,27 @@ ${JSON.stringify(summary)}`;
             );
         };
 
+        // --- 主應用程式 App ---
         function App() {
             const [authState, setAuthState] = useState('loading'); // loading, unauthenticated, authenticated
             const [userProfile, setUserProfile] = useState(null);
+            const [linkedUids, setLinkedUids] = useState([]);
             
             const [view, setView] = useState('dashboard');
-            const [adminViewingUserId, setAdminViewingUserId] = useState(null); // For admin looking at other users
+            const [adminViewingUserId, setAdminViewingUserId] = useState(null);
             const [adminViewingUserName, setAdminViewingUserName] = useState('');
 
             const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+            const [modelName, setModelName] = useState(() => {
+                const saved = localStorage.getItem('gemini_model_v2');
+                return GEMINI_MODELS.some(m => m.id === saved) ? saved : DEFAULT_MODEL;
+            });
             const [scriptUrl, setScriptUrl] = useState(() => localStorage.getItem('google_script_url') || ''); 
             
             const [loading, setLoading] = useState(false);
             const [saving, setSaving] = useState(false);
             const [syncing, setSyncing] = useState(false);
+            const [syncingStorage, setSyncingStorage] = useState(false);
             const [importing, setImporting] = useState(false);
             const [error, setError] = useState('');
             const [successMsg, setSuccessMsg] = useState(''); 
@@ -1248,23 +1652,22 @@ ${JSON.stringify(summary)}`;
             const [history, setHistory] = useState([]);
 
             const fileInputRef = useRef(null);
-            const activeAppId = typeof __app_id !== 'undefined' ? __app_id : 'd17-business-card-recognition';
+            const activeAppId = ACTIVE_APP_ID;
 
-            // --- Auth Listener ---
+            // --- 監聽 Firebase 登入狀態 (自動關聯同信箱不同登入管道之 UID) ---
             useEffect(() => {
                 const unsubscribe = onAuthStateChanged(auth, async (user) => {
                     if (user) {
-                        if (!user.emailVerified) {
-                            // 修正：移除這裡的強制 signOut，避免中斷「註冊流程」寫入 Firestore 的動作
-                            // 將權限設為未認證，阻擋進入主畫面即可
+                        const isGoogleUser = user.providerData?.some(p => p.providerId === 'google.com');
+                        if (!user.emailVerified && !isGoogleUser) {
                             setAuthState('unauthenticated');
                             return;
                         }
 
-                        // Fetch or create profile
                         try {
                             const profileRef = doc(db, 'artifacts', activeAppId, 'public', 'data', 'userProfiles', user.uid);
                             const profileSnap = await getDoc(profileRef);
+                            const isMasterAdmin = (user.email || '').toLowerCase() === MASTER_ADMIN_EMAIL.toLowerCase();
                             
                             let profileData = {};
                             if (profileSnap.exists()) {
@@ -1275,56 +1678,127 @@ ${JSON.stringify(summary)}`;
                                     setAuthState('unauthenticated');
                                     return;
                                 }
-                                // Update login count
                                 await updateDoc(profileRef, { loginCount: (profileData.loginCount || 0) + 1 });
                             } else {
-                                // Fallback for unexpectedly missing profiles
-                                profileData = { email: user.email, role: 'user', identity: 'visitor', realName: user.email.split('@')[0], status: 'active', loginCount: 1 };
+                                profileData = { 
+                                    email: user.email || '', 
+                                    role: isMasterAdmin ? 'admin' : 'user', 
+                                    identity: 'visitor', 
+                                    realName: user.displayName || (user.email ? user.email.split('@')[0] : '使用者'), 
+                                    authProvider: isGoogleUser ? 'google' : 'password',
+                                    status: 'active', 
+                                    loginCount: 1, 
+                                    createdAt: new Date().toISOString() 
+                                };
                                 await setDoc(profileRef, profileData);
                             }
 
-                            // Enforce Master Admin
-                            if (user.email.toLowerCase() === MASTER_ADMIN_EMAIL.toLowerCase() && profileData.role !== 'admin') {
+                            if (isMasterAdmin && profileData.role !== 'admin') {
                                 profileData.role = 'admin';
                                 await updateDoc(profileRef, { role: 'admin' });
                             }
 
+                            // 搜尋是否有相同 Email 的舊帳號 UID (例如先前用信箱密碼登入，現在改用 Google 登入)
+                            const matchedUids = new Set([user.uid]);
+                            if (user.email) {
+                                const targetEmail = user.email.toLowerCase();
+                                for (const appId of getCandidateAppIds()) {
+                                    try {
+                                        const allProfilesSnap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'userProfiles'));
+                                        allProfilesSnap.forEach(pDoc => {
+                                            const pData = pDoc.data();
+                                            if (pData?.email && pData.email.toLowerCase() === targetEmail && pData.status !== 'deleted') {
+                                                matchedUids.add(pDoc.id);
+                                            }
+                                        });
+                                    } catch (e) {
+                                        console.warn("讀取同信箱關聯 UID 略過:", e);
+                                    }
+                                }
+                            }
+
+                            setLinkedUids(Array.from(matchedUids));
                             setUserProfile({ uid: user.uid, ...profileData });
                             setAuthState('authenticated');
                             setView('dashboard');
                         } catch (err) {
                             console.error("Profile fetch error", err);
-                            setError("無法讀取會員資料，請檢查網路。");
+                            setError("無法讀取會員資料，請檢查網路連線。");
                             setAuthState('unauthenticated');
                         }
                     } else {
                         setUserProfile(null);
+                        setLinkedUids([]);
                         setAuthState('unauthenticated');
                     }
                 });
                 return () => unsubscribe();
             }, []);
 
-            // --- Firestore Cards Listener ---
+            // --- 即時監聽 Firestore 名片資料 (支援跨同信箱 UID 與跨環境路徑整合) ---
             useEffect(() => {
                 if (authState !== 'authenticated' || !userProfile) return;
                 
-                const targetUid = adminViewingUserId || userProfile.uid;
-                const cardsRef = collection(db, 'artifacts', activeAppId, 'users', targetUid, 'business_cards');
-                
-                const unsubscribe = onSnapshot(cardsRef, (snapshot) => {
-                    const cards = [];
-                    snapshot.forEach((doc) => cards.push({ id: doc.id, ...doc.data() }));
-                    cards.sort((a, b) => new Date(b.capture_date) - new Date(a.capture_date));
-                    setHistory(cards);
-                }, (err) => {
-                    console.error("Firestore sync error", err);
-                    setError("讀取名片資料失敗。");
-                });
-                return () => unsubscribe();
-            }, [authState, userProfile, adminViewingUserId]);
+                const targetUids = adminViewingUserId 
+                    ? [adminViewingUserId] 
+                    : (linkedUids.length > 0 ? linkedUids : [userProfile.uid]);
+                const candidateAppIds = getCandidateAppIds();
 
+                const sourceMap = new Map();
+                const unsubscribes = [];
+
+                const rebuildHistory = () => {
+                    const mergedById = new Map();
+                    for (const list of sourceMap.values()) {
+                        for (const card of list) {
+                            if (!mergedById.has(card.id) || (!getCardImageField(mergedById.get(card.id)) && getCardImageField(card))) {
+                                mergedById.set(card.id, card);
+                            }
+                        }
+                    }
+                    const allCards = Array.from(mergedById.values());
+                    allCards.sort((a, b) => {
+                        const timeA = a.capture_date ? new Date(a.capture_date).getTime() : 0;
+                        const timeB = b.capture_date ? new Date(b.capture_date).getTime() : 0;
+                        return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+                    });
+                    setHistory(allCards);
+                };
+
+                targetUids.forEach((uid) => {
+                    candidateAppIds.forEach((appId) => {
+                        const sourceKey = `${appId}__${uid}`;
+                        const cardsRef = collection(db, 'artifacts', appId, 'users', uid, 'business_cards');
+                        const unsub = onSnapshot(cardsRef, (snapshot) => {
+                            const cards = [];
+                            snapshot.forEach((docSnap) => {
+                                const data = docSnap.data();
+                                // 確保 id 以 Firestore Document ID 為準，不被空字串覆蓋
+                                cards.push({
+                                    ...data,
+                                    id: docSnap.id,
+                                    imageUrl: getCardImageField(data),
+                                    _ownerUid: uid,
+                                    _appId: appId
+                                });
+                            });
+                            sourceMap.set(sourceKey, cards);
+                            rebuildHistory();
+                        }, (err) => {
+                            console.warn(`略過讀取路徑 ${sourceKey}:`, err.message);
+                        });
+                        unsubscribes.push(unsub);
+                    });
+                });
+
+                return () => {
+                    unsubscribes.forEach(fn => fn());
+                };
+            }, [authState, userProfile, linkedUids, adminViewingUserId]);
+
+            // --- 儲存本機偏好設定 ---
             useEffect(() => { localStorage.setItem('gemini_api_key', apiKey); }, [apiKey]);
+            useEffect(() => { localStorage.setItem('gemini_model_v2', modelName); }, [modelName]);
             useEffect(() => { localStorage.setItem('google_script_url', scriptUrl); }, [scriptUrl]);
 
             const triggerError = (msg) => { setError(msg); setTimeout(() => setError(''), 5000); };
@@ -1336,8 +1810,111 @@ ${JSON.stringify(summary)}`;
                 setAdminViewingUserId(null);
             };
 
+            // 當自動從 Storage 解析出缺漏的圖檔網址時，同步補寫回 Firestore
+            const handleResolvedStorageUrl = async (url, cardId, ownerUid, appId) => {
+                if (!url || !cardId || !ownerUid || adminViewingUserId) return;
+                setHistory(prev => prev.map(c => c.id === cardId ? { ...c, imageUrl: url } : c));
+                if (currentData?.id === cardId && !currentImage) {
+                    setCurrentImage(url);
+                }
+                try {
+                    const cardRef = doc(db, 'artifacts', appId || activeAppId, 'users', ownerUid, 'business_cards', cardId);
+                    await updateDoc(cardRef, { imageUrl: url });
+                } catch (e) {
+                    console.warn("回寫圖片網址略過:", e);
+                }
+            };
+
+            // --- 主動掃描 Firebase Storage 圖檔並修復/找回名片紀錄 ---
+            const handleSyncFromStorage = async () => {
+                if (!userProfile) return triggerError("請先登入系統。");
+                setSyncingStorage(true);
+                setError('');
+                try {
+                    const uidsToScan = linkedUids.length > 0 ? linkedUids : [userProfile.uid];
+                    const appIdsToScan = getCandidateAppIds();
+                    let relinkedCount = 0;
+                    let recoveredCount = 0;
+                    let totalFilesFound = 0;
+
+                    // 建立現有名片索引
+                    const existingMap = new Map();
+                    history.forEach(c => existingMap.set(c.id, c));
+
+                    for (const appId of appIdsToScan) {
+                        for (const uid of uidsToScan) {
+                            let items = [];
+                            try {
+                                const folderRef = ref(storage, `artifacts/${appId}/users/${uid}/images`);
+                                const res = await listAll(folderRef);
+                                items = res.items || [];
+                            } catch (listErr) {
+                                console.warn(`Storage 路徑掃描略過 (artifacts/${appId}/users/${uid}/images):`, listErr.message);
+                                continue;
+                            }
+
+                            for (const itemRef of items) {
+                                totalFilesFound++;
+                                const fileName = itemRef.name;
+                                const cardId = fileName.replace(/\.[^/.]+$/, "");
+                                if (!cardId) continue;
+
+                                let downloadUrl = '';
+                                try {
+                                    downloadUrl = await getDownloadURL(itemRef);
+                                } catch (_) {
+                                    continue;
+                                }
+
+                                const existingCard = existingMap.get(cardId);
+                                if (existingCard) {
+                                    if (!getCardImageField(existingCard)) {
+                                        const targetApp = existingCard._appId || appId;
+                                        const targetOwner = existingCard._ownerUid || uid;
+                                        await updateDoc(doc(db, 'artifacts', targetApp, 'users', targetOwner, 'business_cards', cardId), {
+                                            imageUrl: downloadUrl
+                                        });
+                                        relinkedCount++;
+                                    }
+                                } else {
+                                    // Storage 中有圖檔但 Firestore 尚無紀錄：自動建立找回之名片項目
+                                    const recoveredCard = sanitizeForFirestore({
+                                        ...DEFAULT_SCHEMA,
+                                        id: cardId,
+                                        name: "待確認名片 (從 Storage 找回)",
+                                        notes: `已自動從雲端 Storage (${fileName}) 找回名片圖檔，可點選編輯檢視原圖並補充資訊。`,
+                                        imageUrl: downloadUrl,
+                                        capture_date: new Date().toISOString()
+                                    });
+                                    await setDoc(doc(db, 'artifacts', appId, 'users', uid, 'business_cards', cardId), recoveredCard);
+                                    existingMap.set(cardId, recoveredCard);
+                                    recoveredCount++;
+                                }
+                            }
+                        }
+                    }
+
+                    if (totalFilesFound === 0) {
+                        triggerError("在目前帳號的雲端 Storage 中未掃描到名片圖檔。請確認您登入的信箱是否與原先上傳名片時相同。");
+                    } else if (relinkedCount === 0 && recoveredCount === 0) {
+                        triggerSuccess(`掃描完成！Storage 共 ${totalFilesFound} 張名片圖檔，皆已完整同步顯示於名片總表中。`);
+                    } else {
+                        triggerSuccess(`Storage 同步成功！共掃描 ${totalFilesFound} 張圖檔（修復圖檔連結 ${relinkedCount} 筆、找回未建檔名片 ${recoveredCount} 筆）。`);
+                    }
+                } catch (err) {
+                    triggerError("掃描 Storage 失敗: " + err.message);
+                } finally {
+                    setSyncingStorage(false);
+                }
+            };
+
+            // --- 名片影像 AI 辨識 ---
             const processImage = async (file) => {
-                if (!apiKey) return triggerError("請先設定 Gemini API Key！"), setView('settings');
+                if (!apiKey) {
+                    triggerError("請先設定 Gemini API Key！");
+                    setView('settings');
+                    return;
+                }
                 setLoading(true); setError('');
                 try {
                     const dataUrl = await compressImage(file);
@@ -1346,9 +1923,12 @@ ${JSON.stringify(summary)}`;
                     const prompt = `Act as an expert Relationship Intelligence AI. Extract info from the business card image.
 Return ONLY a valid JSON object without any markdown formatting. Keys: name, name_eng, title, company, phone_mobile, phone_office, email, address, website, notes (string). careerHistory: string. meetContext: empty string. tags: array of strings. aiInsights: object with industry, roleExpertise, companyNature, businessType (string). Preserve Traditional Chinese.`;
                     
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }], generationConfig: { response_mime_type: "application/json", temperature: 0 }})
+                        body: JSON.stringify({ 
+                            contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }], 
+                            generationConfig: { response_mime_type: "application/json", temperature: 0 }
+                        })
                     });
                     
                     const data = await response.json();
@@ -1357,37 +1937,59 @@ Return ONLY a valid JSON object without any markdown formatting. Keys: name, nam
                     const parsedData = parseAIResponse(data.candidates[0].content.parts[0].text);
                     setCurrentData({ ...DEFAULT_SCHEMA, ...parsedData });
                     setView('edit');
-                } catch (err) { triggerError("辨識失敗: " + err.message); } finally { setLoading(false); }
+                } catch (err) { 
+                    triggerError("辨識失敗: " + err.message); 
+                } finally { 
+                    setLoading(false); 
+                }
             };
 
+            // --- 儲存名片至 Firebase ---
             const handleSaveCard = async () => {
                 if (!userProfile) return triggerError("尚未連線至 Firebase。");
                 if (adminViewingUserId) return triggerError("在檢視他人資料時無法儲存。");
                 
                 setSaving(true);
                 const cardId = currentData.id || crypto.randomUUID();
-                let imageUrl = currentData.imageUrl || null;
+                const targetOwnerUid = currentData._ownerUid || userProfile.uid;
+                const targetAppId = currentData._appId || activeAppId;
+                let imageUrl = getCardImageField(currentData) || null;
 
                 try {
                     if (currentImage && currentImage.startsWith('data:image')) {
-                        const imageRef = ref(storage, `artifacts/${activeAppId}/users/${userProfile.uid}/images/${cardId}.jpg`);
+                        const imageRef = ref(storage, `artifacts/${targetAppId}/users/${targetOwnerUid}/images/${cardId}.jpg`);
                         await uploadString(imageRef, currentImage, 'data_url');
                         imageUrl = await getDownloadURL(imageRef);
                     }
 
-                    const newCard = { ...currentData, id: cardId, imageUrl, capture_date: currentData.capture_date || new Date().toISOString() };
-                    await setDoc(doc(db, 'artifacts', activeAppId, 'users', userProfile.uid, 'business_cards', cardId), newCard);
+                    const newCard = sanitizeForFirestore({ 
+                        ...DEFAULT_SCHEMA,
+                        ...currentData, 
+                        id: cardId, 
+                        imageUrl, 
+                        capture_date: currentData.capture_date || new Date().toISOString() 
+                    });
+                    await setDoc(doc(db, 'artifacts', targetAppId, 'users', targetOwnerUid, 'business_cards', cardId), newCard);
 
                     triggerSuccess("名片資料已成功儲存至雲端！");
                     setView('dashboard'); setCurrentData(DEFAULT_SCHEMA); setCurrentImage(null);
-                } catch (err) { triggerError("雲端儲存失敗: " + err.message); } finally { setSaving(false); }
+                } catch (err) { 
+                    triggerError("雲端儲存失敗: " + err.message); 
+                } finally { 
+                    setSaving(false); 
+                }
             };
 
+            // --- 批次匯入 Excel / CSV / PDF / Word ---
             const handleBulkImport = async (e) => {
                 const file = e.target.files?.[0];
                 if (!file || !userProfile) return;
                 const ext = file.name.split('.').pop().toLowerCase();
-                if ((ext === 'pdf' || ext === 'docx') && !apiKey) return triggerError("處理 PDF/Word 檔案需要 Gemini API Key，請先於設定中填寫！"), setView('settings');
+                if ((ext === 'pdf' || ext === 'docx') && !apiKey) {
+                    triggerError("處理 PDF/Word 檔案需要 Gemini API Key，請先於設定中填寫！");
+                    setView('settings');
+                    return;
+                }
                 
                 setImporting(true); setError('');
                 try {
@@ -1411,7 +2013,7 @@ Return ONLY a valid JSON object without any markdown formatting. Keys: name, nam
                         if (apiKey && extractedCards.length > 0) {
                             try {
                                 const prompt = `You are an expert Relationship Intelligence AI. I provide a JSON array of business cards. For each, analyze 'title' and 'company' to generate: 1. 'tags' (array of strings). 2. 'aiInsights' (object with industry, roleExpertise, companyNature, businessType). Merge into original objects. Return ONLY JSON ARRAY. Preserve Traditional Chinese.`;
-                                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
+                                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
                                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { text: JSON.stringify(extractedCards) }] }], generationConfig: { response_mime_type: "application/json", temperature: 0 } })
                                 });
@@ -1424,7 +2026,10 @@ Return ONLY a valid JSON object without any markdown formatting. Keys: name, nam
                         const base64Data = ext === 'pdf' ? await fileToBase64(file) : await mammoth.extractRawText({arrayBuffer: await file.arrayBuffer()}).then(r=>r.value);
                         const prompt = `Extract ALL business card info. Output JSON ARRAY of objects. Keys: name, name_eng, title, company, phone_mobile, phone_office, email, address, website, notes, meetContext. tags (array). aiInsights (object: industry, roleExpertise, companyNature, businessType). Preserve Traditional Chinese.`;
                         let contents = ext === 'docx' ? [{ parts: [{ text: prompt }, { text: base64Data }] }] : [{ parts: [{ text: prompt }, { inlineData: { mimeType: "application/pdf", data: base64Data } }] }];
-                        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents, generationConfig: { response_mime_type: "application/json", temperature: 0 } }) });
+                        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, { 
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, 
+                            body: JSON.stringify({ contents, generationConfig: { response_mime_type: "application/json", temperature: 0 } }) 
+                        });
                         const resData = await response.json();
                         if (resData.error) throw new Error(resData.error.message);
                         extractedCards = parseAIResponse(resData.candidates[0].content.parts[0].text);
@@ -1435,15 +2040,26 @@ Return ONLY a valid JSON object without any markdown formatting. Keys: name, nam
                         for (const card of extractedCards) {
                             if (!card.name && !card.company) continue; 
                             const cardId = crypto.randomUUID();
-                            await setDoc(doc(db, 'artifacts', activeAppId, 'users', userProfile.uid, 'business_cards', cardId), { ...DEFAULT_SCHEMA, ...card, id: cardId, capture_date: new Date().toISOString() });
+                            const cleanCard = sanitizeForFirestore({ ...DEFAULT_SCHEMA, ...card, id: cardId, capture_date: new Date().toISOString() });
+                            await setDoc(doc(db, 'artifacts', activeAppId, 'users', userProfile.uid, 'business_cards', cardId), cleanCard);
                             added++;
                         }
                         triggerSuccess(`成功匯入並智能分析 ${added} 筆名片資料至雲端！`);
-                    } else { triggerError("未找到任何可匯入資料。"); }
-                } catch (err) { triggerError("匯入失敗: " + err.message); } finally { setImporting(false); e.target.value = ''; }
+                    } else { 
+                        triggerError("未找到任何可匯入資料。"); 
+                    }
+                } catch (err) { 
+                    triggerError("匯入失敗: " + err.message); 
+                } finally { 
+                    setImporting(false); 
+                    e.target.value = ''; 
+                }
             };
 
-            const handleCloudSync = async () => { /* Simplified for brevity, same as original */ triggerSuccess("GAS 同步功能為舊版設計，請使用匯入匯出。")};
+            const handleCloudSync = async () => { 
+                triggerSuccess("GAS 同步功能為舊版設計，目前系統已升級為 Firebase 即時雲端同步，亦可直接使用匯入匯出功能。");
+            };
+
             const handleImportJSON = (e) => {
                 const file = e.target.files?.[0]; if (!file) return;
                 const reader = new FileReader();
@@ -1452,32 +2068,37 @@ Return ONLY a valid JSON object without any markdown formatting. Keys: name, nam
                         const importedData = JSON.parse(event.target.result);
                         if (!Array.isArray(importedData)) throw new Error();
                         let added = 0;
-                        for(const item of importedData) {
-                            if(item.id) {
+                        for (const item of importedData) {
+                            if (item.id) {
                                 await setDoc(doc(db, 'artifacts', activeAppId, 'users', userProfile.uid, 'business_cards', item.id), item);
                                 added++;
                             }
                         }
                         triggerSuccess(`備份載入成功！匯入 ${added} 筆資料。`);
-                    } catch (err) { triggerError("載入失敗：無效的 JSON 檔案。"); }
+                    } catch (err) { 
+                        triggerError("載入失敗：無效的 JSON 檔案。"); 
+                    }
                 };
                 reader.readAsText(file); e.target.value = ''; 
             };
 
-            // 修正：重構渲染邏輯，將 Notification 移至最上層，確保未登入時也能看見錯誤提示
             return (
                 <div className="min-h-[100dvh] bg-slate-50 font-sans flex flex-col text-slate-800 relative">
-                    {/* 全局通知區塊 (不受登入狀態限制) */}
+                    {/* 全局通知區塊 */}
                     <div className="fixed top-[20px] md:top-[80px] left-1/2 transform -translate-x-1/2 z-[9999] w-[90%] max-w-md flex flex-col gap-3 pointer-events-none">
                         {error && (
                             <div className="bg-white border-l-4 border-red-500 p-4 rounded-xl shadow-xl flex justify-between items-start animate-fade-in pointer-events-auto ring-1 ring-black/5">
-                                <div className="flex items-start text-slate-700 whitespace-pre-line text-sm"><div className="bg-red-100 text-red-600 p-1.5 rounded-full mr-3 shrink-0 mt-0.5"><X size={14} /></div><div><span className="font-bold text-red-600 block mb-1">系統提示</span>{error}</div></div>
+                                <div className="flex items-start text-slate-700 whitespace-pre-line text-sm">
+                                    <div className="bg-red-100 text-red-600 p-1.5 rounded-full mr-3 shrink-0 mt-0.5"><X size={14} /></div>
+                                    <div><span className="font-bold text-red-600 block mb-1">系統提示</span>{error}</div>
+                                </div>
                                 <button onClick={() => setError('')} className="text-slate-400 hover:text-slate-600 ml-3 shrink-0 p-1"><X size={16} /></button>
                             </div>
                         )}
                         {successMsg && (
                             <div className="bg-white border-l-4 border-green-500 p-4 rounded-xl shadow-xl flex items-center animate-fade-in pointer-events-auto ring-1 ring-black/5">
-                                <div className="bg-green-100 text-green-600 p-1.5 rounded-full mr-3 shrink-0"><Check size={14} /></div><span className="text-slate-700 text-sm font-medium">{successMsg}</span>
+                                <div className="bg-green-100 text-green-600 p-1.5 rounded-full mr-3 shrink-0"><Check size={14} /></div>
+                                <span className="text-slate-700 text-sm font-medium">{successMsg}</span>
                             </div>
                         )}
                     </div>
@@ -1489,12 +2110,12 @@ Return ONLY a valid JSON object without any markdown formatting. Keys: name, nam
                             <p className="text-slate-400 font-medium animate-pulse">系統載入中...</p>
                         </div>
                     ) : authState === 'unauthenticated' ? (
-                        <AuthView onAuthSuccess={() => {}} onError={triggerError} onSuccessMsg={triggerSuccess} />
+                        <AuthView onError={triggerError} onSuccessMsg={triggerSuccess} />
                     ) : (
                         <>
                             <input type="file" accept="image/*" capture="environment" ref={fileInputRef} className="hidden" onChange={(e) => e.target.files?.[0] && processImage(e.target.files[0])} />
                             
-                            <header className={`${APP_CONFIG.themeColor} text-white shadow-md sticky top-0 z-40`} style={{ paddingTop: 'max(env(safe-area-inset-top, 60px), 60px)' }}>
+                            <header className={`${APP_CONFIG.themeColor} text-white shadow-md sticky top-0 z-40`} style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
                                 <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
                                     <div className="flex items-center gap-3 cursor-pointer" onClick={() => {setView('dashboard'); setAdminViewingUserId(null);}}>
                                         <img src={APP_CONFIG.logoUrl} alt="Logo" className="h-10 w-auto" />
@@ -1509,8 +2130,8 @@ Return ONLY a valid JSON object without any markdown formatting. Keys: name, nam
                                                 <ShieldAlert size={14} className="mr-1" /> 管理後台
                                             </button>
                                         )}
-                                        <button onClick={() => setView('about')} className="p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white"><User size={20} /></button>
-                                        <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white"><Settings size={20} /></button>
+                                        <button onClick={() => setView('about')} className="p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white" title="關於創作者"><User size={20} /></button>
+                                        <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-700 rounded-full transition-colors text-slate-300 hover:text-white" title="系統設定"><Settings size={20} /></button>
                                     </div>
                                 </div>
                             </header>
@@ -1523,17 +2144,95 @@ Return ONLY a valid JSON object without any markdown formatting. Keys: name, nam
                                     </div>
                                 )}
 
-                                {!loading && view === 'dashboard' && <DashboardView profile={userProfile} onUpload={(e) => e.target.files?.[0] && processImage(e.target.files[0])} onCamera={() => fileInputRef.current && fileInputRef.current.click()} savedCount={history.length} onExportCSV={() => downloadCSV(history)} onExportExcel={() => downloadExcel(history)} onExportJSON={() => downloadJSON(history)} onImportJSON={handleImportJSON} onCloudSync={handleCloudSync} isSyncing={syncing} hasScriptUrl={!!scriptUrl} onOpenHistory={() => setView('history')} onBulkImport={handleBulkImport} isImporting={importing} />}
-                                {!loading && view === 'settings' && <SettingsView profile={userProfile} apiKey={apiKey} setApiKey={setApiKey} scriptUrl={scriptUrl} setScriptUrl={setScriptUrl} onLogout={handleLogout} onBack={() => setView('dashboard')} />}
+                                {!loading && view === 'dashboard' && (
+                                    <DashboardView 
+                                        profile={userProfile} 
+                                        linkedAccountNote={linkedUids.length > 1 ? `🔗 已自動整合您相同信箱 (${userProfile?.email}) 下 ${linkedUids.length} 個登入管道的名片資料` : ''}
+                                        onUpload={(e) => e.target.files?.[0] && processImage(e.target.files[0])} 
+                                        onCamera={() => fileInputRef.current && fileInputRef.current.click()} 
+                                        savedCount={history.length} 
+                                        onExportCSV={() => downloadCSV(history)} 
+                                        onExportExcel={() => downloadExcel(history, triggerError)} 
+                                        onExportJSON={() => downloadJSON(history)} 
+                                        onImportJSON={handleImportJSON} 
+                                        onSyncStorage={handleSyncFromStorage}
+                                        isSyncingStorage={syncingStorage}
+                                        onCloudSync={handleCloudSync} 
+                                        isSyncing={syncing} 
+                                        hasScriptUrl={!!scriptUrl} 
+                                        hasApiKey={!!apiKey}
+                                        onOpenSettings={() => setView('settings')}
+                                        onOpenHistory={() => setView('history')} 
+                                        onBulkImport={handleBulkImport} 
+                                        isImporting={importing} 
+                                    />
+                                )}
+                                {!loading && view === 'settings' && (
+                                    <SettingsView 
+                                        profile={userProfile} 
+                                        apiKey={apiKey} 
+                                        setApiKey={setApiKey} 
+                                        modelName={modelName}
+                                        setModelName={setModelName}
+                                        scriptUrl={scriptUrl} 
+                                        setScriptUrl={setScriptUrl} 
+                                        onLogout={handleLogout} 
+                                        onBack={() => setView('dashboard')} 
+                                    />
+                                )}
                                 {!loading && view === 'about' && <AboutView onBack={() => setView('dashboard')} />}
-                                {!loading && view === 'edit' && <EditView data={currentData} imagePreview={currentImage} onChange={(field, value) => setCurrentData({...currentData, [field]: value})} onSave={handleSaveCard} onCancel={() => {setCurrentImage(null); setView(adminViewingUserId ? 'history' : 'dashboard');}} isSaving={saving} apiKey={apiKey} onError={triggerError} readonly={!!adminViewingUserId} />}
-                                {!loading && view === 'history' && <HistoryView viewTitle={adminViewingUserId ? `[管理員檢視] ${adminViewingUserName} 的名片總表` : '名片資料總表'} readonly={!!adminViewingUserId} history={history} onBack={() => setView(adminViewingUserId ? 'admin' : 'dashboard')} onDelete={async (id) => { 
-                                    if (!userProfile || adminViewingUserId) return;
-                                    try { await deleteDoc(doc(db, 'artifacts', activeAppId, 'users', userProfile.uid, 'business_cards', id)); } catch (err) { triggerError("刪除失敗: " + err.message); }
-                                }} onSelect={(item) => { setCurrentData(item); setCurrentImage(item.imageUrl || null); setView('edit'); }} onExportCSV={(h) => downloadCSV(h, adminViewingUserId ? `Cards_${adminViewingUserName}` : 'export')} onExportExcel={downloadExcel} />}
-                                {!loading && view === 'admin' && userProfile?.role === 'admin' && <AdminDashboardView currentProfile={userProfile} onBack={() => setView('dashboard')} onError={triggerError} onSuccessMsg={triggerSuccess} apiKey={apiKey} onEnterUserHistory={(uid, name) => { setAdminViewingUserId(uid); setAdminViewingUserName(name); setView('history'); }} />}
+                                {!loading && view === 'edit' && (
+                                    <EditView 
+                                        data={currentData} 
+                                        imagePreview={currentImage} 
+                                        currentUid={adminViewingUserId || userProfile?.uid}
+                                        onImageResolved={handleResolvedStorageUrl}
+                                        onChange={(field, value) => setCurrentData({...currentData, [field]: value})} 
+                                        onSave={handleSaveCard} 
+                                        onCancel={() => {setCurrentImage(null); setView(adminViewingUserId ? 'history' : 'dashboard');}} 
+                                        isSaving={saving} 
+                                        apiKey={apiKey} 
+                                        modelName={modelName}
+                                        onError={triggerError} 
+                                        readonly={!!adminViewingUserId} 
+                                    />
+                                )}
+                                {!loading && view === 'history' && (
+                                    <HistoryView 
+                                        viewTitle={adminViewingUserId ? `[管理員檢視] ${adminViewingUserName} 的名片總表` : '名片資料總表'} 
+                                        readonly={!!adminViewingUserId} 
+                                        history={history} 
+                                        currentUid={adminViewingUserId || userProfile?.uid}
+                                        onResolvedUrl={handleResolvedStorageUrl}
+                                        onSyncStorage={handleSyncFromStorage}
+                                        isSyncingStorage={syncingStorage}
+                                        onBack={() => setView(adminViewingUserId ? 'admin' : 'dashboard')} 
+                                        onDelete={async (item) => { 
+                                            if (!userProfile || adminViewingUserId) return;
+                                            const targetOwner = item._ownerUid || userProfile.uid;
+                                            const targetApp = item._appId || activeAppId;
+                                            try { await deleteDoc(doc(db, 'artifacts', targetApp, 'users', targetOwner, 'business_cards', item.id)); } catch (err) { triggerError("刪除失敗: " + err.message); }
+                                        }} 
+                                        onSelect={(item) => { setCurrentData(item); setCurrentImage(getCardImageField(item) || null); setView('edit'); }} 
+                                        onExportCSV={(h) => downloadCSV(h, adminViewingUserId ? `Cards_${adminViewingUserName}` : 'export')} 
+                                        onExportExcel={(h) => downloadExcel(h, triggerError)} 
+                                    />
+                                )}
+                                {!loading && view === 'admin' && userProfile?.role === 'admin' && (
+                                    <AdminDashboardView 
+                                        currentProfile={userProfile} 
+                                        onBack={() => setView('dashboard')} 
+                                        onError={triggerError} 
+                                        onSuccessMsg={triggerSuccess} 
+                                        apiKey={apiKey} 
+                                        modelName={modelName}
+                                        onEnterUserHistory={(uid, name) => { setAdminViewingUserId(uid); setAdminViewingUserName(name); setView('history'); }} 
+                                    />
+                                )}
                             </main>
-                            <footer className="bg-slate-900 text-slate-500 py-4 text-center text-xs border-t border-slate-800"><p>{APP_CONFIG.copyright}</p></footer>
+                            <footer className="bg-slate-900 text-slate-500 py-4 text-center text-xs border-t border-slate-800">
+                                <p>{APP_CONFIG.copyright}</p>
+                            </footer>
                         </>
                     )}
                 </div>
